@@ -1,0 +1,337 @@
+# ============================================================
+# Home Assistant Dashboard - Fiat Ducato 250 OBD2
+# ============================================================
+#
+# Installation:
+#   1. Home Assistant → Einstellungen → Dashboards → Dashboard hinzufügen
+#   2. Neues Dashboard öffnen → Rechts oben ⋮ → Raw-Konfigurationseditor
+#   3. Alles markieren, diesen Inhalt einfügen, Speichern
+#
+# WICHTIG: Entity-IDs anpassen!
+#   Die Entity-IDs unten basieren auf dem device_name "ducato-obd2".
+#   Falls du einen anderen Namen gewählt hast, musst du die IDs
+#   per Suchen & Ersetzen anpassen:
+#     sensor.ducato_obd2_xxx → sensor.DEIN_NAME_xxx
+#
+# ============================================================
+
+title: Ducato OBD2
+views:
+  - title: Fahrzeug
+    path: fahrzeug
+    type: sections
+    max_columns: 4
+    sections:
+
+      # ========================================
+      # ZEILE 1: Fahrzeug-Status Header
+      # ========================================
+      - type: grid
+        cards:
+          - type: entities
+            title: "🚐 Ducato Status"
+            show_header_toggle: false
+            entities:
+              - entity: binary_sensor.ducato_obd2_motor_lauft
+                name: Motor
+              - entity: binary_sensor.ducato_obd2_elm327_verbunden
+                name: ELM327 Verbindung
+              - entity: sensor.ducato_obd2_batteriespannung
+                name: Batterie
+
+      # ========================================
+      # ZEILE 2: Haupt-Gauges (Fahrzeug-Look)
+      # ========================================
+      - type: grid
+        column_span: 4
+        cards:
+          - type: horizontal-stack
+            cards:
+
+              # --- Drehzahl Gauge ---
+              - type: gauge
+                entity: sensor.ducato_obd2_drehzahl
+                name: Drehzahl
+                unit: RPM
+                min: 0
+                max: 6000
+                needle: true
+                severity:
+                  green: 0
+                  yellow: 4000
+                  red: 5000
+
+              # --- Geschwindigkeit Gauge ---
+              - type: gauge
+                entity: sensor.ducato_obd2_geschwindigkeit
+                name: Geschwindigkeit
+                unit: km/h
+                min: 0
+                max: 180
+                needle: true
+                severity:
+                  green: 0
+                  yellow: 120
+                  red: 150
+
+              # --- Motorlast Gauge ---
+              - type: gauge
+                entity: sensor.ducato_obd2_motorlast
+                name: Motorlast
+                unit: "%"
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  green: 0
+                  yellow: 70
+                  red: 90
+
+      # ========================================
+      # ZEILE 3: Motor-Temperaturen
+      # ========================================
+      - type: grid
+        cards:
+          - type: markdown
+            content: "## Motor\nTemperaturen & Drücke"
+
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.ducato_obd2_motortemperatur
+                name: Kühlmittel
+                unit: °C
+                min: -40
+                max: 130
+                needle: true
+                severity:
+                  green: -40
+                  yellow: 95
+                  red: 110
+
+              - type: gauge
+                entity: sensor.ducato_obd2_motoroltemperatur
+                name: Öltemperatur
+                unit: °C
+                min: -40
+                max: 160
+                needle: true
+                severity:
+                  green: -40
+                  yellow: 120
+                  red: 140
+
+              - type: gauge
+                entity: sensor.ducato_obd2_ansauglufttemperatur
+                name: Ansaugluft
+                unit: °C
+                min: -40
+                max: 80
+                needle: true
+                severity:
+                  green: -40
+                  yellow: 50
+                  red: 65
+
+          - type: entities
+            entities:
+              - entity: sensor.ducato_obd2_ansaugkrummerdruck
+                name: Ansaugkrümmerdruck (MAP)
+                icon: mdi:gauge-low
+              - entity: sensor.ducato_obd2_luftmassenmesser
+                name: Luftmassenmesser (MAF)
+                icon: mdi:weather-windy
+              - entity: sensor.ducato_obd2_drosselklappe
+                name: Drosselklappe
+                icon: mdi:car-cruise-control
+              - entity: sensor.ducato_obd2_abgasruckfuhrung
+                name: Abgasrückführung (AGR)
+                icon: mdi:recycle
+
+      # ========================================
+      # ZEILE 4: Kraftstoff & Verbrauch
+      # ========================================
+      - type: grid
+        cards:
+          - type: markdown
+            content: "## Kraftstoff\nTankstand & Verbrauch"
+
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.ducato_obd2_kraftstoffstand
+                name: Tankfüllung
+                unit: "%"
+                min: 0
+                max: 100
+                needle: true
+                severity:
+                  red: 0
+                  yellow: 15
+                  green: 25
+
+              - type: gauge
+                entity: sensor.ducato_obd2_kraftstoffverbrauch
+                name: Verbrauch
+                unit: L/h
+                min: 0
+                max: 30
+                needle: true
+                severity:
+                  green: 0
+                  yellow: 15
+                  red: 25
+
+          - type: entities
+            entities:
+              - entity: sensor.ducato_obd2_motorlaufzeit
+                name: Motorlaufzeit
+                icon: mdi:timer-outline
+
+      # ========================================
+      # ZEILE 5: Umgebung & Spannung
+      # ========================================
+      - type: grid
+        cards:
+          - type: markdown
+            content: "## Umgebung & Elektrik\nTemperaturen & Spannungen"
+
+          - type: entities
+            entities:
+              - entity: sensor.ducato_obd2_umgebungstemperatur
+                name: Außentemperatur
+                icon: mdi:thermometer
+              - entity: sensor.ducato_obd2_barometrischer_druck
+                name: Luftdruck
+                icon: mdi:weather-partly-cloudy
+              - entity: sensor.ducato_obd2_batteriespannung
+                name: Batteriespannung
+                icon: mdi:car-battery
+              - entity: sensor.ducato_obd2_ecu_spannung
+                name: ECU Spannung
+                icon: mdi:flash
+
+      # ========================================
+      # ZEILE 6: Diagnose
+      # ========================================
+      - type: grid
+        cards:
+          - type: markdown
+            content: "## Diagnose\nFehlerspeicher & Debug"
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: sensor.ducato_obd2_aktive_fehlercodes
+                state_not: "Keine Fehler"
+            card:
+              type: markdown
+              content: >-
+                ## ⚠️ Aktive Fehlercodes
+
+                **{{ states('sensor.ducato_obd2_aktive_fehlercodes') }}**
+
+
+                Fehlercodes können mit einer OBD2-App (z.B. Torque, Car Scanner)
+                nachgeschlagen und gelöscht werden.
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: sensor.ducato_obd2_aktive_fehlercodes
+                state: "Keine Fehler"
+            card:
+              type: markdown
+              content: >-
+                ## ✅ Keine Fehlercodes
+
+                Der Fehlerspeicher ist leer.
+
+          - type: entities
+            title: Debug
+            show_header_toggle: false
+            entities:
+              - entity: sensor.ducato_obd2_aktive_fehlercodes
+                name: Fehlercodes (roh)
+              - entity: sensor.ducato_obd2_letzte_elm327_antwort
+                name: Letzte ELM327 Antwort
+              - entity: binary_sensor.ducato_obd2_elm327_verbunden
+                name: ELM327 Status
+
+      # ========================================
+      # ZEILE 7: System
+      # ========================================
+      - type: grid
+        cards:
+          - type: markdown
+            content: "## System\nATOM S3 & Netzwerk"
+
+          - type: entities
+            entities:
+              - entity: sensor.ducato_obd2_wifi_signal
+                name: WiFi Signal
+                icon: mdi:wifi
+              - entity: sensor.ducato_obd2_ip_adresse
+                name: IP-Adresse
+                icon: mdi:ip-network
+              - entity: sensor.ducato_obd2_wlan
+                name: WLAN
+                icon: mdi:access-point-network
+              - entity: sensor.ducato_obd2_laufzeit
+                name: ATOM S3 Uptime
+                icon: mdi:clock-outline
+
+  # ========================================
+  # TAB 2: Verlauf (History Graphs)
+  # ========================================
+  - title: Verlauf
+    path: verlauf
+    type: sections
+    max_columns: 2
+    sections:
+
+      - type: grid
+        cards:
+          - type: history-graph
+            title: Drehzahl & Geschwindigkeit
+            hours_to_show: 2
+            entities:
+              - entity: sensor.ducato_obd2_drehzahl
+                name: Drehzahl
+              - entity: sensor.ducato_obd2_geschwindigkeit
+                name: Geschwindigkeit
+
+          - type: history-graph
+            title: Motorlast & Drosselklappe
+            hours_to_show: 2
+            entities:
+              - entity: sensor.ducato_obd2_motorlast
+                name: Motorlast
+              - entity: sensor.ducato_obd2_drosselklappe
+                name: Drosselklappe
+
+      - type: grid
+        cards:
+          - type: history-graph
+            title: Temperaturen
+            hours_to_show: 4
+            entities:
+              - entity: sensor.ducato_obd2_motortemperatur
+                name: Kühlmittel
+              - entity: sensor.ducato_obd2_motoroltemperatur
+                name: Öltemperatur
+              - entity: sensor.ducato_obd2_ansauglufttemperatur
+                name: Ansaugluft
+              - entity: sensor.ducato_obd2_umgebungstemperatur
+                name: Außen
+
+          - type: history-graph
+            title: Spannung & Kraftstoff
+            hours_to_show: 4
+            entities:
+              - entity: sensor.ducato_obd2_batteriespannung
+                name: Batterie
+              - entity: sensor.ducato_obd2_kraftstoffstand
+                name: Tank
+              - entity: sensor.ducato_obd2_kraftstoffverbrauch
+                name: Verbrauch L/h
