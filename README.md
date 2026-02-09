@@ -6,6 +6,32 @@ ESPHome Custom Component zum Auslesen von OBD2-Fahrzeugdaten per BLE (Bluetooth 
 
 Getestet mit **Fiat Ducato 250** + **Veepeak OBDCheck BLE+** + **M5Stack ATOM S3**.
 
+---
+
+## Inhaltsverzeichnis
+
+- [Voraussetzungen](#voraussetzungen)
+- [Hardware](#hardware)
+- [Zwei Varianten](#zwei-varianten)
+- [Schnellstart](#schnellstart-custom-component)
+- [Verfügbare Sensor-Typen](#verfügbare-sensor-typen)
+- [Hub-Konfiguration](#hub-konfiguration)
+- [Home Assistant Dashboard](#home-assistant-dashboard)
+- [Sicherheit](#sicherheit)
+- [Troubleshooting](#troubleshooting)
+- [Optimierung](#optimierung)
+- [Kompatibilität](#kompatibilität)
+
+---
+
+## Voraussetzungen
+
+- **Home Assistant** mit installiertem **ESPHome Add-on** (oder ESPHome CLI)
+- **ESP32** Mikrocontroller (z.B. M5Stack ATOM S3, ESP32-DevKit, etc.)
+- **ELM327 BLE Dongle** im OBD2-Port des Fahrzeugs
+- Fahrzeug mit **OBD2-Anschluss** (Benziner ab 2001, Diesel ab 2004)
+- **nRF Connect App** (optional, zum Ermitteln der BLE UUIDs)
+
 ## Hardware
 
 | Komponente | Beschreibung |
@@ -29,7 +55,7 @@ Dieses Repo enthält zwei Wege um OBD2-Daten auszulesen:
 Saubere ESPHome-Komponente mit eigenem YAML-Schema. Einfach zu konfigurieren, leicht erweiterbar.
 
 ```yaml
-# Sensor hinzufügen = 2 Zeilen:
+# Sensor hinzufügen = 3 Zeilen:
 sensor:
   - platform: elm327_ble
     type: rpm
@@ -44,55 +70,119 @@ Klassischer Ansatz mit Inline-Lambdas. Funktioniert ohne External Components, is
 
 Datei: `ducato-obd2-atom-s3.yaml`
 
-## Dateien
+## Dateiübersicht
 
 | Datei / Ordner | Beschreibung |
 |---|---|
 | `components/elm327_ble/` | Custom Component (C++ & Python) |
 | `example-component.yaml` | Beispiel-Config mit Custom Component |
 | `ducato-obd2-atom-s3.yaml` | Standalone-Config (ohne Component) |
-| `ducato-ble-scanner.yaml` | BLE-Scanner (MAC/UUIDs ermitteln) |
-| `dashboard-ducato-obd2.yaml` | Home Assistant Dashboard |
-| `secrets.yaml.example` | Vorlage fuer secrets.yaml |
+| `ducato-ble-scanner.yaml` | BLE-Scanner zum Ermitteln von MAC & UUIDs |
+| `dashboard-ducato-obd2.yaml` | Fertiges Home Assistant Dashboard |
+| `secrets.yaml.example` | Vorlage für secrets.yaml |
+
+---
 
 ## Schnellstart (Custom Component)
 
-### 1. BLE-Daten ermitteln (einmalig)
+### Schritt 1: BLE-Daten ermitteln (einmalig)
 
-MAC-Adresse und UUIDs deines ELM327-Dongles herausfinden:
+Bevor du loslegst, musst du die **MAC-Adresse** und die **BLE UUIDs** deines ELM327-Dongles herausfinden. Jeder Dongle hat andere Werte.
 
-- **Option A:** `ducato-ble-scanner.yaml` flashen und Logs lesen
-- **Option B:** App **nRF Connect** (iOS/Android) nutzen
+**Option A: BLE-Scanner flashen**
 
-Typische Veepeak UUIDs:
+1. `ducato-ble-scanner.yaml` in ESPHome einfügen und auf den ESP32 flashen
+2. ELM327-Dongle in den OBD2-Port stecken, Zündung einschalten
+3. ESPHome-Logs beobachten → nach dem Namen deines Dongles suchen (z.B. `VEEPEAK`, `IOS-Vlink`, `OBDII`)
+4. **MAC-Adresse** und **Service UUID** notieren
+
+**Option B: nRF Connect App (Handy)**
+
+1. App [nRF Connect](https://www.nordicsemi.com/Products/Development-tools/nrf-connect-for-mobile) installieren (iOS/Android)
+2. Dongle in OBD2-Port, Zündung an
+3. In der App scannen, Dongle finden, verbinden
+4. **MAC-Adresse**, **Service UUID** und **Characteristics** notieren:
+   - Characteristic mit **Notify** = RX (Empfang, typisch `FFF1`)
+   - Characteristic mit **Write** = TX (Senden, typisch `FFF2`)
+
+**Typische Veepeak UUIDs:**
 
 | Variante | Service | RX (Notify) | TX (Write) |
 |---|---|---|---|
 | A | `FFE0` | `FFE1` | `FFE1` |
 | B | `FFF0` | `FFF1` | `FFF2` |
 
-### 2. Config erstellen
+> **Wichtig:** Die UUIDs variieren je nach Dongle-Modell und Firmware-Version. Immer selbst prüfen!
+
+### Schritt 2: secrets.yaml anlegen
+
+```bash
+cp secrets.yaml.example secrets.yaml
+```
+
+Dann die Datei öffnen und deine Werte eintragen:
 
 ```yaml
+wifi_ssid: "DeinWLAN"
+wifi_password: "DeinPasswort"
+ap_password: "FallbackPasswort"
+api_key: "dein-base64-key"      # Generieren mit: esphome gen-key
+ota_password: "dein-ota-passwort"
+```
+
+### Schritt 3: Config erstellen
+
+Erstelle eine neue YAML-Datei in ESPHome (oder kopiere `example-component.yaml`) und passe die markierten Stellen an:
+
+```yaml
+esphome:
+  name: mein-auto-obd2
+  friendly_name: "Mein Auto OBD2"
+
+esp32:
+  board: m5stack-atoms3       # ← Dein ESP32-Board anpassen!
+  variant: esp32s3
+  framework:
+    type: arduino
+
+logger:
+api:
+  encryption:
+    key: !secret api_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true
+  ap:
+    ssid: "OBD2-Fallback"
+    password: !secret ap_password
+
+# --- Custom Component laden ---
 external_components:
-  - source: github://DEIN_USER/esphome-obd2-ble
+  - source: github://rubenmuehlhans/esphome-obd2-ble
     components: [elm327_ble]
 
+# --- BLE Verbindung ---
 esp32_ble_tracker:
   scan_parameters:
     active: true
 
 ble_client:
-  - mac_address: "AA:BB:CC:DD:EE:FF"  # Deine MAC
+  - mac_address: "AA:BB:CC:DD:EE:FF"  # ← Deine MAC-Adresse!
     id: elm327_ble_client
 
+# --- ELM327 Hub ---
 elm327_ble:
   id: elm327_hub
   ble_client_id: elm327_ble_client
-  service_uuid: "0000FFF0-0000-1000-8000-00805F9B34FB"
+  service_uuid: "0000FFF0-0000-1000-8000-00805F9B34FB"  # ← Deine UUIDs!
   char_tx_uuid: "0000FFF2-0000-1000-8000-00805F9B34FB"
   char_rx_uuid: "0000FFF1-0000-1000-8000-00805F9B34FB"
 
+# --- Sensoren (nur die gewünschten eintragen) ---
 sensor:
   - platform: elm327_ble
     type: rpm
@@ -106,54 +196,65 @@ sensor:
     type: coolant_temp
     name: "Motortemperatur"
 
+  - platform: elm327_ble
+    type: battery_voltage
+    name: "Batteriespannung"
+
+# --- Fehlerspeicher ---
 text_sensor:
   - platform: elm327_ble
     type: dtc
     name: "Fehlercodes"
 
+# --- Status ---
 binary_sensor:
   - platform: elm327_ble
     type: engine_running
-    name: "Motor laeuft"
+    name: "Motor läuft"
+
+  - platform: elm327_ble
+    type: connected
+    name: "ELM327 verbunden"
 ```
 
-### 3. secrets.yaml anlegen
+> **Tipp:** Starte mit wenigen Sensoren und füge nach und nach weitere hinzu. Nicht jedes Fahrzeug unterstützt alle PIDs.
 
-```bash
-cp secrets.yaml.example secrets.yaml
-# Dann Werte eintragen
-```
+### Schritt 4: Flashen
 
-### 4. Flashen
+1. In Home Assistant → ESPHome Dashboard → YAML einfügen
+2. **Install** klicken
+3. Erstes Mal per **USB** flashen
+4. Danach sind OTA-Updates per WiFi möglich
 
-In Home Assistant ESPHome Dashboard: YAML einfuegen, Install klicken.
-Erstes Mal per USB, danach OTA per WiFi.
+---
 
-## Verfuegbare Sensor-Typen
+## Verfügbare Sensor-Typen
 
 ### sensor (platform: elm327_ble)
 
 | type | Name | PID | Einheit | Formel |
 |---|---|---|---|---|
 | `coolant_temp` | Motortemperatur | `0x05` | °C | A - 40 |
-| `rpm` | Drehzahl | `0x0C` | RPM | ((A*256)+B) / 4 |
+| `rpm` | Drehzahl | `0x0C` | RPM | ((A×256)+B) / 4 |
 | `speed` | Geschwindigkeit | `0x0D` | km/h | A |
-| `engine_load` | Motorlast | `0x04` | % | A*100 / 255 |
+| `engine_load` | Motorlast | `0x04` | % | A×100 / 255 |
 | `intake_temp` | Ansauglufttemperatur | `0x0F` | °C | A - 40 |
-| `fuel_level` | Kraftstoffstand | `0x2F` | % | A*100 / 255 |
-| `throttle` | Drosselklappe | `0x11` | % | A*100 / 255 |
+| `fuel_level` | Kraftstoffstand | `0x2F` | % | A×100 / 255 |
+| `throttle` | Drosselklappe | `0x11` | % | A×100 / 255 |
 | `battery_voltage` | Batteriespannung | `ATRV` | V | direkt |
-| `intake_map` | Ansaugkruemmerdruck | `0x0B` | kPa | A |
-| `maf` | Luftmassenmesser | `0x10` | g/s | ((A*256)+B) / 100 |
-| `engine_runtime` | Motorlaufzeit | `0x1F` | s | (A*256)+B |
-| `oil_temp` | Motoroeltemperatur | `0x5C` | °C | A - 40 |
+| `intake_map` | Ansaugkrümmerdruck | `0x0B` | kPa | A |
+| `maf` | Luftmassenmesser | `0x10` | g/s | ((A×256)+B) / 100 |
+| `engine_runtime` | Motorlaufzeit | `0x1F` | s | (A×256)+B |
+| `oil_temp` | Motoröltemperatur | `0x5C` | °C | A - 40 |
 | `ambient_temp` | Umgebungstemperatur | `0x46` | °C | A - 40 |
-| `ecu_voltage` | ECU Spannung | `0x42` | V | ((A*256)+B) / 1000 |
-| `fuel_rate` | Kraftstoffverbrauch | `0x5E` | L/h | ((A*256)+B) / 20 |
+| `ecu_voltage` | ECU Spannung | `0x42` | V | ((A×256)+B) / 1000 |
+| `fuel_rate` | Kraftstoffverbrauch | `0x5E` | L/h | ((A×256)+B) / 20 |
 | `baro_pressure` | Barometrischer Druck | `0x33` | kPa | A |
-| `egr` | Abgasrueckfuehrung | `0x2E` | % | A*100 / 255 |
+| `egr` | Abgasrückführung | `0x2E` | % | A×100 / 255 |
 
 ### Eigene PIDs abfragen
+
+Du kannst auch PIDs abfragen, die nicht in der Liste oben stehen. In dem Fall wird der Rohwert des ersten Datenbytes (A) zurückgegeben. Für PIDs mit komplexeren Formeln musst du die Berechnung über einen ESPHome-Lambda-Filter selbst ergänzen.
 
 ```yaml
 sensor:
@@ -177,7 +278,9 @@ sensor:
 | type | Beschreibung |
 |---|---|
 | `connected` | ELM327 BLE-Verbindung hergestellt und initialisiert |
-| `engine_running` | Motor laeuft (Drehzahl > 0) |
+| `engine_running` | Motor läuft (Drehzahl > 0) |
+
+---
 
 ## Hub-Konfiguration
 
@@ -194,87 +297,112 @@ elm327_ble:
 
 | Parameter | Pflicht | Default | Beschreibung |
 |---|---|---|---|
-| `ble_client_id` | ja | - | ID des ble_client |
+| `ble_client_id` | ja | - | ID des `ble_client` |
 | `service_uuid` | ja | - | BLE Service UUID des ELM327 |
 | `char_tx_uuid` | ja | - | Write Characteristic (Befehle senden) |
 | `char_rx_uuid` | ja | - | Notify Characteristic (Antworten empfangen) |
 | `request_interval` | nein | `2s` | Abstand zwischen PID-Abfragen |
 | `request_timeout` | nein | `5s` | Timeout wenn keine Antwort kommt |
 
+---
+
 ## Home Assistant Dashboard
 
-Fertiges Dashboard in `dashboard-ducato-obd2.yaml`:
+Ein fertiges Dashboard liegt in `dashboard-ducato-obd2.yaml`.
 
-1. Home Assistant -> Einstellungen -> Dashboards -> Dashboard hinzufuegen
-2. Dashboard oeffnen -> oben rechts 3 Punkte -> **Raw-Konfigurationseditor**
-3. Inhalt von `dashboard-ducato-obd2.yaml` einfuegen, Speichern
+**Installation:**
 
-Features:
-- Nadel-Gauges fuer Drehzahl, Geschwindigkeit, Motorlast
-- Temperatur-Gauges (Kuehlmittel, Oel, Ansaugluft)
+1. Home Assistant → Einstellungen → Dashboards → Dashboard hinzufügen
+2. Neues Dashboard öffnen → oben rechts ⋮ → **Raw-Konfigurationseditor**
+3. Inhalt von `dashboard-ducato-obd2.yaml` einfügen → Speichern
+
+**Enthält:**
+
+- Nadel-Gauges für Drehzahl, Geschwindigkeit, Motorlast
+- Temperatur-Gauges (Kühlmittel, Öl, Ansaugluft)
 - Kraftstoff-Anzeige mit Verbrauch
-- Bedingte Fehlercode-Karte (gruen wenn leer, Warnung bei DTCs)
-- History-Graphen fuer alle Werte
-- Kein HACS noetig -- nur Standard HA Karten
+- Bedingte Fehlercode-Karte (grün wenn leer, Warnung bei DTCs)
+- History-Graphen für alle Werte
+- Kein HACS nötig -- nur Standard Home Assistant Karten
+
+> **Hinweis:** Die Entity-IDs im Dashboard basieren auf dem Gerätenamen `ducato-obd2`. Falls du einen anderen Namen verwendest, passe die IDs per Suchen & Ersetzen an: `ducato_obd2` → `dein_name`.
+
+---
 
 ## ELM327-Initialisierung
 
-Bei BLE-Connect sendet die Component automatisch:
+Bei BLE-Connect sendet die Component automatisch folgende Init-Sequenz:
 
 ```
-ATZ       -> Reset
-ATE0      -> Echo aus
-ATL0      -> Linefeed aus
-ATS0      -> Spaces aus
-ATH0      -> Headers aus
-ATSP0     -> Automatische Protokollerkennung
-0100      -> Erste Abfrage (loest Protokoll-Erkennung aus, 5s warten)
+ATZ       → Reset des ELM327
+ATE0      → Echo aus
+ATL0      → Linefeed aus
+ATS0      → Spaces aus (kompakte Antworten)
+ATH0      → Headers aus
+ATSP0     → Automatische Protokollerkennung
+0100      → Erste Abfrage (löst Protokoll-Erkennung aus, 5s warten)
 ```
+
+Danach beginnt der zyklische PID-Abfrage-Modus.
+
+---
 
 ## Sicherheit
 
-**Dieser Code ist rein lesend (read-only) und kann keine Schaeden am Fahrzeug verursachen.**
+**Dieser Code ist rein lesend (read-only) und kann keine Schäden am Fahrzeug verursachen.**
 
 - Alle OBD2-Abfragen sind **Mode 01** (Live-Daten lesen)
-- Fehlerspeicher wird nur **gelesen** (Mode 03), nicht geloescht
+- Fehlerspeicher wird nur **gelesen** (Mode 03), nicht gelöscht
 - AT-Befehle konfigurieren nur den ELM327-Chip, nicht das Fahrzeug
 - Im schlimmsten Fall trennt sich die BLE-Verbindung -- kein Effekt aufs Fahrzeug
+
+---
 
 ## Troubleshooting
 
 ### BLE-Verbindung kommt nicht zustande
 
 - Dongle aus OBD-Port ziehen und wieder einstecken
-- MAC-Adresse pruefen (BLE-Scanner nochmal laufen lassen)
-- Kein Handy/Tablet gleichzeitig mit dem Dongle verbunden? (nur eine BLE-Verbindung moeglich)
+- MAC-Adresse prüfen (BLE-Scanner nochmal laufen lassen)
+- Ist ein Handy/Tablet gleichzeitig mit dem Dongle verbunden? (Es ist nur **eine** BLE-Verbindung gleichzeitig möglich)
+- Stimmen die BLE UUIDs? (Service, TX, RX nochmal mit nRF Connect prüfen)
 
 ### Alle PIDs liefern `NO DATA`
 
-- Zuendung muss **an** sein (mindestens Klemme 15)
-- Erste Abfrage nach Verbindung braucht 5-10s (Protokoll-Erkennung)
+- Zündung muss **an** sein (mindestens Klemme 15)
+- Die erste Abfrage nach Verbindung braucht 5-10 Sekunden (Protokoll-Erkennung)
+- Falls dauerhaft: Eventuell falsches Protokoll. In der Standalone-YAML kann `ATSP0` durch `ATSP6` (CAN 500k) oder `ATSP7` (CAN 250k) ersetzt werden
 
 ### Einzelne PIDs liefern `NO DATA`
 
-- Normal -- nicht jedes Fahrzeug unterstuetzt alle PIDs
-- Diese Sensoren aus der Config entfernen um den Zyklus zu beschleunigen
+- **Das ist normal.** Nicht jedes Fahrzeug unterstützt alle PIDs
+- Diese Sensoren einfach aus der Config entfernen um den Abfragezyklus zu beschleunigen
+- Typisch nicht unterstützt beim Ducato 250: Öltemperatur (`oil_temp`), Kraftstoffverbrauch (`fuel_rate`)
 
 ### `BUFFER FULL` oder `STOPPED`
 
-- `request_interval` erhoehen (z.B. `3s`)
+- `request_interval` erhöhen (z.B. auf `3s` oder `5s`)
 - Weniger Sensoren konfigurieren
 
-### Werte nicht numerisch in HA
+### Werte "nicht numerisch" in Home Assistant
 
-- Alle Sensoren haben `state_class: measurement` (wird automatisch von der Component gesetzt)
-- Falls das Problem trotzdem auftritt: Entity in HA loeschen und neu entdecken lassen
+- Die Component setzt automatisch `state_class: measurement` bei allen Sensoren
+- Falls das Problem trotzdem auftritt: Entity in HA löschen (Einstellungen → Geräte → Ducato OBD2) und neu entdecken lassen, oder HA neustarten
+
+---
 
 ## Optimierung
 
-- Nicht unterstuetzte PIDs (die `NO DATA` liefern) aus der Config entfernen
-- `request_interval` anpassen: 1s (schnell, evtl. instabil) bis 5s (langsam, stabil)
-- Beispiel: 10 Sensoren x 2s = 20s pro Durchlauf
+- **Nicht unterstützte PIDs entfernen:** PIDs die `NO DATA` liefern einfach aus der YAML löschen. Weniger Sensoren = schnellerer Zyklus
+- **`request_interval` anpassen:**
+  - `1s` = schnell, aber evtl. instabil bei vielen Sensoren
+  - `2s` = Standard, guter Kompromiss
+  - `5s` = langsam, aber sehr stabil
+- **Rechenbeispiel:** 10 Sensoren × 2s = 20s pro komplettem Durchlauf
 
-## Kompatibilitaet
+---
+
+## Kompatibilität
 
 | Getestet mit | Status |
 |---|---|
@@ -282,7 +410,11 @@ ATSP0     -> Automatische Protokollerkennung
 | M5Stack ATOM S3 (ESP32-S3) | funktioniert |
 | Fiat Ducato 250 (2.3 Multijet) | funktioniert |
 
-Sollte mit jedem ELM327-BLE-Dongle und jedem ESP32 funktionieren. BLE UUIDs variieren je nach Dongle -- immer per BLE-Scan pruefen.
+Sollte mit jedem **ELM327-BLE-Dongle** und jedem **ESP32** funktionieren. Die BLE UUIDs variieren je nach Dongle -- daher immer per BLE-Scan prüfen.
+
+> Du hast die Component mit einem anderen Dongle/Fahrzeug getestet? Erstelle gerne ein [Issue](https://github.com/rubenmuehlhans/esphome-obd2-ble/issues) oder einen PR um die Kompatibilitätsliste zu erweitern!
+
+---
 
 ## Quellen
 
