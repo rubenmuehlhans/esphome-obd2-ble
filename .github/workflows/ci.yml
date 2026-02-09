@@ -1,0 +1,66 @@
+name: ESPHome CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    name: Validate YAML
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config:
+          - example-component.yaml
+          - ducato-obd2-atom-s3.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Create secrets.yaml
+        run: cp secrets.yaml.example secrets.yaml
+
+      - name: Validate ${{ matrix.config }}
+        run: esphome config ${{ matrix.config }}
+
+  compile:
+    name: Compile Firmware
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      matrix:
+        config:
+          - example-component.yaml
+          - ducato-obd2-atom-s3.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Create secrets.yaml
+        run: cp secrets.yaml.example secrets.yaml
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .esphome
+          key: pio-${{ matrix.config }}-${{ hashFiles('components/**') }}
+          restore-keys: |
+            pio-${{ matrix.config }}-
+
+      - name: Compile ${{ matrix.config }}
+        run: esphome compile ${{ matrix.config }}
