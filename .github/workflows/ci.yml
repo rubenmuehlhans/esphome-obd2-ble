@@ -26,7 +26,9 @@ jobs:
         run: pip install esphome
 
       - name: Create secrets.yaml
-        run: cp secrets.yaml.example secrets.yaml
+        run: |
+          cp secrets.yaml.example secrets.yaml
+          cp secrets.yaml.example tests/secrets.yaml
 
       - name: Validate ${{ matrix.config }}
         run: esphome config ${{ matrix.config }}
@@ -53,7 +55,9 @@ jobs:
         run: pip install esphome
 
       - name: Create secrets.yaml
-        run: cp secrets.yaml.example secrets.yaml
+        run: |
+          cp secrets.yaml.example secrets.yaml
+          cp secrets.yaml.example tests/secrets.yaml
 
       - name: Cache PlatformIO
         uses: actions/cache@v4
