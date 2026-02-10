@@ -409,6 +409,22 @@ Danach beginnt der zyklische PID-Abfrage-Modus.
 | Veepeak OBDCheck BLE+ | funktioniert |
 | M5Stack ATOM S3 (ESP32-S3) | funktioniert |
 | Fiat Ducato 250 (2.3 Multijet) | funktioniert |
+| Framework: Arduino | funktioniert (96% Flash) |
+| Framework: ESP-IDF | funktioniert (78% Flash) |
+
+Beide ESPHome-Frameworks werden unterstützt:
+
+```yaml
+# Arduino (Standard)
+esp32:
+  framework:
+    type: arduino
+
+# ESP-IDF (kleinere Firmware, mehr Flash-Platz frei)
+esp32:
+  framework:
+    type: esp-idf
+```
 
 Sollte mit jedem **ELM327-BLE-Dongle** und jedem **ESP32** funktionieren. Die BLE UUIDs variieren je nach Dongle -- daher immer per BLE-Scan prüfen.
 

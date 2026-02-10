@@ -14,6 +14,7 @@ jobs:
         config:
           - example-component.yaml
           - ducato-obd2-atom-s3.yaml
+          - tests/test-esp-idf.yaml
     steps:
       - uses: actions/checkout@v4
 
@@ -35,10 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate
     strategy:
+      fail-fast: false
       matrix:
         config:
           - example-component.yaml
           - ducato-obd2-atom-s3.yaml
+          - tests/test-esp-idf.yaml
     steps:
       - uses: actions/checkout@v4
 
