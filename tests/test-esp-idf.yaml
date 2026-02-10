@@ -27,7 +27,7 @@ wifi:
 external_components:
   - source:
       type: local
-      path: components
+      path: ../components
     components: [elm327_ble]
 
 esp32_ble_tracker:
