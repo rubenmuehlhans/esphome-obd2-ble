@@ -13,6 +13,7 @@ jobs:
       matrix:
         config:
           - example-component.yaml
+          - example-kia-niro-ev.yaml
           - ducato-obd2-atom-s3.yaml
           - tests/test-esp-idf.yaml
     steps:
@@ -42,6 +43,7 @@ jobs:
       matrix:
         config:
           - example-component.yaml
+          - example-kia-niro-ev.yaml
           - ducato-obd2-atom-s3.yaml
           - tests/test-esp-idf.yaml
     steps:

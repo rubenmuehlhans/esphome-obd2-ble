@@ -20,8 +20,13 @@ void ELM327BLEHub::dump_config() {
   ESP_LOGCONFIG(TAG, "  Abfrageintervall: %u ms", this->request_interval_);
   ESP_LOGCONFIG(TAG, "  Timeout: %u ms", this->request_timeout_);
   ESP_LOGCONFIG(TAG, "  Registrierte PID-Sensoren: %d", (int) this->pid_sensors_.size());
+  ESP_LOGCONFIG(TAG, "  Registrierte Raw-PID Text-Sensoren: %d", (int) this->raw_pid_text_sensors_.size());
   if (this->dtc_text_sensor_ != nullptr)
     ESP_LOGCONFIG(TAG, "  DTC Text Sensor: ja");
+  for (auto &entry : this->raw_pid_text_sensors_) {
+    ESP_LOGCONFIG(TAG, "  Raw-PID: cmd=%s header=%s prefix=%s",
+                  entry.command.c_str(), entry.header.c_str(), entry.expected_prefix.c_str());
+  }
 }
 
 // ============================================================
@@ -47,6 +52,7 @@ void ELM327BLEHub::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t
       this->init_step_ = 0;
       this->waiting_for_response_ = false;
       this->response_buffer_.clear();
+      this->current_header_.clear();
       if (this->connected_binary_sensor_ != nullptr)
         this->connected_binary_sensor_->publish_state(false);
       break;
@@ -73,7 +79,7 @@ void ELM327BLEHub::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t
       ESP_LOGI(TAG, "BLE: TX Handle=0x%04X, RX Handle=0x%04X",
                this->char_tx_handle_, this->char_rx_handle_);
 
-      // Notify registrieren für RX Characteristic
+      // Notify registrieren fuer RX Characteristic
       auto status = esp_ble_gattc_register_for_notify(
           this->parent()->get_gattc_if(), this->parent()->get_remote_bda(), this->char_rx_handle_);
       if (status != ESP_OK) {
@@ -94,12 +100,12 @@ void ELM327BLEHub::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t
       if (param->notify.handle != this->char_rx_handle_)
         break;
 
-      // Daten zum Puffer hinzufügen
+      // Daten zum Puffer hinzufuegen
       std::string chunk((char *) param->notify.value, param->notify.value_len);
       ESP_LOGV(TAG, "Empfangen (raw): %s", chunk.c_str());
       this->response_buffer_ += chunk;
 
-      // Prüfe ob Antwort komplett (ELM327 sendet '>' als Prompt)
+      // Pruefe ob Antwort komplett (ELM327 sendet '>' als Prompt)
       if (this->response_buffer_.find('>') != std::string::npos) {
         std::string full = this->response_buffer_;
         this->response_buffer_.clear();
@@ -124,12 +130,39 @@ void ELM327BLEHub::loop() {
       this->run_init_sequence();
       break;
 
+    case STATE_SWITCHING_HEADER: {
+      // Header-Wechsel mit festem Delay (500ms pro Schritt)
+      if (now - this->header_switch_time_ >= 500) {
+        if (this->header_switch_step_ == 0) {
+          // ATSH senden
+          std::string atsh_cmd = "ATSH" + this->pending_header_ + "\r";
+          ESP_LOGD(TAG, "Header-Wechsel: %s", atsh_cmd.c_str());
+          this->send_command(atsh_cmd);
+          this->header_switch_step_ = 1;
+          this->header_switch_time_ = now;
+        } else {
+          // Fertig: Header gesetzt
+          this->current_header_ = this->pending_header_;
+          this->pending_header_.clear();
+          this->header_switch_step_ = 0;
+          this->state_ = STATE_READY;
+          ESP_LOGD(TAG, "Header gesetzt auf: %s", this->current_header_.c_str());
+          // Response-Buffer leeren (ATSH-OK-Antwort verwerfen)
+          this->response_buffer_.clear();
+          this->waiting_for_response_ = false;
+          // Sofort die PID senden
+          this->request_next_pid();
+        }
+      }
+      break;
+    }
+
     case STATE_READY:
-      // Nächste PID-Abfrage senden
+      // Naechste PID-Abfrage senden
       if (!this->waiting_for_response_ && (now - this->last_request_time_ >= this->request_interval_)) {
         this->request_next_pid();
       }
-      // Timeout prüfen
+      // Timeout pruefen
       if (this->waiting_for_response_ && (now - this->last_request_time_ >= this->request_timeout_)) {
         ESP_LOGW(TAG, "Antwort-Timeout, mache weiter...");
         this->waiting_for_response_ = false;
@@ -168,8 +201,10 @@ void ELM327BLEHub::run_init_sequence() {
     // Initialisierung abgeschlossen
     ESP_LOGI(TAG, "ELM327 initialisiert - bereit fuer Abfragen");
     this->state_ = STATE_READY;
-    this->current_pid_index_ = 0;
+    this->current_poll_index_ = 0;
     this->waiting_for_response_ = false;
+    this->current_header_.clear();
+    this->update_total_poll_count();
     if (this->connected_binary_sensor_ != nullptr)
       this->connected_binary_sensor_->publish_state(true);
     return;
@@ -177,7 +212,7 @@ void ELM327BLEHub::run_init_sequence() {
 
   if (this->last_init_time_ == 0 || (now - this->last_init_time_ >= init_cmds[this->init_step_].delay_after)) {
     if (this->last_init_time_ != 0) {
-      // Nächster Schritt
+      // Naechster Schritt
       this->init_step_++;
       if (this->init_step_ >= INIT_STEPS_COUNT) {
         // Letzter Delay abgelaufen, fertig
@@ -217,36 +252,109 @@ void ELM327BLEHub::send_command(const std::string &cmd) {
 }
 
 // ============================================================
+// Oeffentlicher Befehl (fuer HA Service-Calls)
+// ============================================================
+void ELM327BLEHub::send_custom_command(const std::string &cmd) {
+  if (this->state_ < STATE_READY) {
+    ESP_LOGW(TAG, "ELM327 noch nicht bereit, Befehl ignoriert: %s", cmd.c_str());
+    return;
+  }
+  ESP_LOGI(TAG, "Custom Command: %s", cmd.c_str());
+  this->response_buffer_.clear();
+  this->send_command(cmd);
+}
+
+// ============================================================
+// Hilfs-Methoden fuer den Polling-Zyklus
+// ============================================================
+void ELM327BLEHub::update_total_poll_count() {
+  this->total_poll_count_ = this->pid_sensors_.size() + this->raw_pid_text_sensors_.size();
+  if (this->dtc_text_sensor_ != nullptr)
+    this->total_poll_count_++;
+}
+
+std::string ELM327BLEHub::get_header_for_poll_index(int idx) {
+  int pid_count = this->pid_sensors_.size();
+  int raw_count = this->raw_pid_text_sensors_.size();
+
+  if (idx < pid_count) {
+    // Numerische PID-Sensoren haben keinen Header
+    return "";
+  } else if (idx < pid_count + raw_count) {
+    return this->raw_pid_text_sensors_[idx - pid_count].header;
+  }
+  // DTC: kein Header
+  return "";
+}
+
+std::string ELM327BLEHub::get_command_for_poll_index(int idx) {
+  int pid_count = this->pid_sensors_.size();
+  int raw_count = this->raw_pid_text_sensors_.size();
+
+  if (idx < pid_count) {
+    return this->pid_sensors_[idx].config.command;
+  } else if (idx < pid_count + raw_count) {
+    return this->raw_pid_text_sensors_[idx - pid_count].command;
+  }
+  // DTC
+  return "03\r";
+}
+
+// ============================================================
 // PID-Abfrage-Zyklus
 // ============================================================
 void ELM327BLEHub::request_next_pid() {
-  if (this->pid_sensors_.empty() && this->dtc_text_sensor_ == nullptr)
+  if (this->total_poll_count_ == 0)
     return;
 
-  // Gesamtliste: PID-Sensoren + optional DTC
-  int total = this->pid_sensors_.size();
-  bool has_dtc = (this->dtc_text_sensor_ != nullptr);
-  if (has_dtc) total++;
+  int idx = this->current_poll_index_ % this->total_poll_count_;
 
-  if (total == 0) return;
+  // Pruefen ob Header-Wechsel noetig
+  std::string needed_header = this->get_header_for_poll_index(idx);
+  if (!needed_header.empty() && needed_header != this->current_header_) {
+    // Header-Wechsel einleiten
+    ESP_LOGD(TAG, "Header-Wechsel noetig: %s -> %s", this->current_header_.c_str(), needed_header.c_str());
+    this->pending_header_ = needed_header;
+    this->header_switch_step_ = 0;
+    this->header_switch_time_ = millis();
+    this->state_ = STATE_SWITCHING_HEADER;
+    // Index NICHT weiterschalten — nach dem Header-Wechsel wird request_next_pid
+    // erneut aufgerufen und dann die PID gesendet
+    return;
+  }
 
-  int idx = this->current_pid_index_ % total;
+  // Wenn wir von einem Header-Sensor zurueck zu einem ohne Header wechseln,
+  // muessen wir den Header zuruecksetzen
+  if (needed_header.empty() && !this->current_header_.empty()) {
+    // Zurueck zum Default-Header
+    ESP_LOGD(TAG, "Header zuruecksetzen (ATSH-Reset)");
+    this->pending_header_ = "";
+    // Sende ATSH-Reset: leerer Header = Standard-Broadcast
+    // Wir setzen einfach current_header_ zurueck, der ELM327 nutzt
+    // dann den zuletzt gesetzten Header. Fuer Mode 01 PIDs ist das
+    // normalerweise kein Problem (Broadcast-Anfrage).
+    // Bei Bedarf kann man hier "ATSH7DF\r" (CAN Broadcast) senden.
+    this->current_header_.clear();
+  }
 
-  std::string cmd;
-  if (idx < (int) this->pid_sensors_.size()) {
-    cmd = this->pid_sensors_[idx].config.command;
-    ESP_LOGD(TAG, "PID[%d/%d] gesendet: %s", idx + 1, total, cmd.c_str());
+  std::string cmd = this->get_command_for_poll_index(idx);
+  int pid_count = this->pid_sensors_.size();
+  int raw_count = this->raw_pid_text_sensors_.size();
+
+  if (idx < pid_count) {
+    ESP_LOGD(TAG, "PID[%d/%d] gesendet: %s", idx + 1, this->total_poll_count_, cmd.c_str());
+  } else if (idx < pid_count + raw_count) {
+    ESP_LOGD(TAG, "Raw-PID[%d/%d] gesendet: %s (header=%s)", idx + 1, this->total_poll_count_,
+             cmd.c_str(), this->raw_pid_text_sensors_[idx - pid_count].header.c_str());
   } else {
-    // DTC-Abfrage
-    cmd = "03\r";
-    ESP_LOGD(TAG, "DTC Abfrage [%d/%d] gesendet", idx + 1, total);
+    ESP_LOGD(TAG, "DTC Abfrage [%d/%d] gesendet", idx + 1, this->total_poll_count_);
   }
 
   this->response_buffer_.clear();
   this->waiting_for_response_ = true;
   this->last_request_time_ = millis();
   this->send_command(cmd);
-  this->current_pid_index_ = (idx + 1) % total;
+  this->current_poll_index_ = (idx + 1) % this->total_poll_count_;
 }
 
 // ============================================================
@@ -265,9 +373,14 @@ void ELM327BLEHub::process_response(const std::string &response) {
 
   ESP_LOGD(TAG, "Antwort: %s", clean.c_str());
 
-  // Debug: Raw Text Sensor
+  // Debug: Raw Text Sensor (alle Antworten)
   if (this->raw_text_sensor_ != nullptr) {
     this->raw_text_sensor_->publish_state(clean);
+  }
+
+  // Header-Wechsel Antwort (OK/ERROR) ignorieren
+  if (this->state_ == STATE_SWITCHING_HEADER) {
+    return;
   }
 
   // Fehler ignorieren
@@ -278,6 +391,16 @@ void ELM327BLEHub::process_response(const std::string &response) {
     ESP_LOGW(TAG, "Fehler/Keine Daten: %s", clean.c_str());
     return;
   }
+
+  // AT-Antworten ignorieren (z.B. "OK", "ATSH7E4" Echo)
+  if (clean == "OK" || clean.find("AT") == 0) {
+    return;
+  }
+
+  // Raw-PID Text-Sensoren pruefen (vor dem spezifischen Parsing)
+  // Damit werden alle Responses, die zu einem raw_pid Sensor passen,
+  // als Hex-String weitergegeben
+  this->dispatch_raw_pid_response(clean);
 
   // DTC-Antwort (Mode 03, beginnt mit "43")
   if (clean.find("43") != std::string::npos) {
@@ -296,10 +419,36 @@ void ELM327BLEHub::process_response(const std::string &response) {
     this->parse_obd2_response(clean);
     return;
   }
+
+  // Mode 22 Antwort (beginnt mit "62") — wird bereits von dispatch_raw_pid_response behandelt
+  // Falls kein raw_pid Sensor registriert ist, loggen wir es trotzdem
+  if (clean.find("62") != std::string::npos) {
+    ESP_LOGD(TAG, "Mode 22 Response (kein passender Sensor): %s", clean.c_str());
+    return;
+  }
 }
 
 // ============================================================
-// OBD2 PID Parsing
+// Raw-PID Text-Sensor Dispatching
+// ============================================================
+void ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
+  for (auto &entry : this->raw_pid_text_sensors_) {
+    if (entry.expected_prefix.empty())
+      continue;
+
+    // Pruefen ob die Response den erwarteten Prefix enthaelt
+    size_t pos = clean.find(entry.expected_prefix);
+    if (pos != std::string::npos) {
+      // Gesamte Response ab dem Prefix als Hex-String publizieren
+      std::string data = clean.substr(pos);
+      entry.sensor->publish_state(data);
+      ESP_LOGD(TAG, "Raw-PID Match [%s]: %s", entry.expected_prefix.c_str(), data.c_str());
+    }
+  }
+}
+
+// ============================================================
+// OBD2 PID Parsing (Mode 01)
 // ============================================================
 void ELM327BLEHub::parse_obd2_response(const std::string &clean) {
   size_t pos = clean.find("41");
@@ -330,7 +479,7 @@ void ELM327BLEHub::parse_obd2_response(const std::string &clean) {
     case 0x04:  // Motorlast: A*100/255
       value = (a * 100.0f) / 255.0f;
       break;
-    case 0x05:  // Kühlmitteltemperatur: A - 40
+    case 0x05:  // Kuehlmitteltemperatur: A - 40
       value = a - 40.0f;
       break;
     case 0x0B:  // MAP: A
@@ -369,14 +518,14 @@ void ELM327BLEHub::parse_obd2_response(const std::string &clean) {
     case 0x46:  // Umgebungstemperatur: A - 40
       value = a - 40.0f;
       break;
-    case 0x5C:  // Öltemperatur: A - 40
+    case 0x5C:  // Oeltemperatur: A - 40
       value = a - 40.0f;
       break;
     case 0x5E:  // Kraftstoffverbrauch: ((A*256)+B)/20
       value = ((a * 256) + b) / 20.0f;
       break;
     default:
-      // Generische Formel: einfach A zurückgeben
+      // Generische Formel: einfach A zurueckgeben
       value = a;
       ESP_LOGD(TAG, "PID 0x%02X: generisch A=%d", pid, a);
       break;
@@ -471,18 +620,23 @@ void ELM327BLEHub::parse_voltage_response(const std::string &clean) {
 // ============================================================
 // Sensor-Registrierung
 // ============================================================
-void ELM327BLEHub::register_pid_sensor(sensor::Sensor *sensor, uint8_t mode, uint8_t pid) {
+void ELM327BLEHub::register_pid_sensor(sensor::Sensor *sensor, uint8_t mode, uint16_t pid) {
   PIDSensorEntry entry;
   entry.sensor = sensor;
   entry.config.mode = mode;
   entry.config.pid = pid;
   entry.config.is_at_command = false;
-  // Befehl generieren: z.B. mode=0x01 pid=0x05 → "0105\r"
-  char cmd[8];
-  snprintf(cmd, sizeof(cmd), "%02X%02X\r", mode, pid);
+  // Befehl generieren: z.B. mode=0x01 pid=0x05 -> "0105\r"
+  // Fuer Mode 22 mit erweiterten PIDs: mode=0x22 pid=0x0101 -> "220101\r"
+  char cmd[16];
+  if (pid <= 0xFF) {
+    snprintf(cmd, sizeof(cmd), "%02X%02X\r", mode, pid);
+  } else {
+    snprintf(cmd, sizeof(cmd), "%02X%04X\r", mode, pid);
+  }
   entry.config.command = cmd;
   this->pid_sensors_.push_back(entry);
-  ESP_LOGD(TAG, "PID Sensor registriert: Mode 0x%02X PID 0x%02X → %s", mode, pid, cmd);
+  ESP_LOGD(TAG, "PID Sensor registriert: Mode 0x%02X PID 0x%04X -> %s", mode, pid, cmd);
 }
 
 void ELM327BLEHub::register_at_sensor(sensor::Sensor *sensor, const std::string &command) {
@@ -502,6 +656,59 @@ void ELM327BLEHub::register_dtc_text_sensor(text_sensor::TextSensor *sensor) {
 
 void ELM327BLEHub::register_raw_text_sensor(text_sensor::TextSensor *sensor) {
   this->raw_text_sensor_ = sensor;
+}
+
+void ELM327BLEHub::register_raw_pid_text_sensor(text_sensor::TextSensor *sensor, uint8_t mode,
+                                                  uint16_t pid, const std::string &header,
+                                                  const std::string &command) {
+  RawPIDTextSensorEntry entry;
+  entry.sensor = sensor;
+  entry.mode = mode;
+  entry.pid = pid;
+  entry.header = header;
+
+  if (!command.empty()) {
+    // Beliebiger Befehl (direkt uebergeben)
+    entry.command = command;
+    // Wenn command mit \r endet, das fuer den Prefix entfernen
+    std::string cmd_clean = command;
+    if (!cmd_clean.empty() && cmd_clean.back() == '\r')
+      cmd_clean.pop_back();
+    // Erwarteten Response-Prefix berechnen:
+    // Mode XX -> Response-Prefix = (mode + 0x40) + PID
+    // z.B. "2201019" -> Response beginnt mit "6201019"
+    // Fuer beliebige Commands versuchen wir den Prefix zu berechnen
+    if (cmd_clean.length() >= 2) {
+      int cmd_mode = (int) strtol(cmd_clean.substr(0, 2).c_str(), nullptr, 16);
+      if (cmd_mode > 0 && cmd_mode < 0x40) {
+        char prefix[16];
+        snprintf(prefix, sizeof(prefix), "%02X%s", cmd_mode + 0x40, cmd_clean.substr(2).c_str());
+        entry.expected_prefix = prefix;
+      }
+    }
+  } else {
+    // Command aus mode + pid generieren
+    char cmd[16];
+    if (pid <= 0xFF) {
+      snprintf(cmd, sizeof(cmd), "%02X%02X\r", mode, pid);
+    } else {
+      snprintf(cmd, sizeof(cmd), "%02X%04X\r", mode, pid);
+    }
+    entry.command = cmd;
+
+    // Erwarteten Response-Prefix berechnen
+    char prefix[16];
+    if (pid <= 0xFF) {
+      snprintf(prefix, sizeof(prefix), "%02X%02X", mode + 0x40, pid);
+    } else {
+      snprintf(prefix, sizeof(prefix), "%02X%04X", mode + 0x40, pid);
+    }
+    entry.expected_prefix = prefix;
+  }
+
+  this->raw_pid_text_sensors_.push_back(entry);
+  ESP_LOGD(TAG, "Raw-PID Text-Sensor registriert: cmd=%s header=%s prefix=%s",
+           entry.command.c_str(), entry.header.c_str(), entry.expected_prefix.c_str());
 }
 
 void ELM327BLEHub::register_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
