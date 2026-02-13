@@ -95,7 +95,7 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
 
   // Initialisierung
   int init_step_{0};
-  static const int INIT_STEPS_COUNT = 7;
+  static const int INIT_STEPS_COUNT = 9;
   uint32_t last_init_time_{0};
 
   // PID-Abfragezyklus (numerische Sensoren)
@@ -109,7 +109,7 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   int total_poll_count_{0};
 
   uint32_t request_interval_{2000};
-  uint32_t request_timeout_{5000};
+  uint32_t request_timeout_{10000};  // 10s fuer Multi-Frame ISO-TP Responses
   uint32_t last_request_time_{0};
   bool waiting_for_response_{false};
 

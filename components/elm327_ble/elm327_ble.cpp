@@ -193,6 +193,8 @@ void ELM327BLEHub::run_init_sequence() {
     {"ATL0\r",   500, "Linefeed aus"},
     {"ATS0\r",   500, "Spaces aus"},
     {"ATH0\r",   500, "Headers aus"},
+    {"ATAL\r",   500, "Allow Long Messages (>7 Bytes)"},
+    {"ATST96\r",  500, "Timeout 600ms (fuer Multi-Frame)"},
     {"ATSP0\r", 1000, "Auto-Protokoll"},
     {"0100\r",  5000, "Protokoll-Erkennung"},
   };
@@ -363,12 +365,33 @@ void ELM327BLEHub::request_next_pid() {
 void ELM327BLEHub::process_response(const std::string &response) {
   this->waiting_for_response_ = false;
 
-  // Bereinigen
+  // Bereinigen: Whitespace und ELM327-Prompt entfernen
   std::string clean;
   for (char c : response) {
     if (c != ' ' && c != '\r' && c != '\n' && c != '>') {
       clean += c;
     }
+  }
+
+  // ISO-TP Multi-Frame Segment-Nummern entfernen
+  // Bei langen Antworten fuegt der ELM327 Zeilen-Nummern ein: 0: 1: 2: ... F:
+  // z.B. "620101EFFBE71:ED950000..." -> "620101EFFBE7ED950000..."
+  {
+    std::string stripped;
+    stripped.reserve(clean.size());
+    for (size_t i = 0; i < clean.size(); i++) {
+      // Pruefe auf Muster: einzelnes Hex-Zeichen gefolgt von ':'
+      if (i + 1 < clean.size() && clean[i + 1] == ':') {
+        char c = clean[i];
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+          // Segment-Nummer + ':' ueberspringen
+          i += 1;  // das ':' wird uebersprungen, die for-Schleife macht i++
+          continue;
+        }
+      }
+      stripped += clean[i];
+    }
+    clean = stripped;
   }
 
   ESP_LOGD(TAG, "Antwort: %s", clean.c_str());
