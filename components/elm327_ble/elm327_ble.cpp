@@ -142,11 +142,17 @@ void ELM327BLEHub::loop() {
           this->header_switch_time_ = now;
         } else {
           // Fertig: Header gesetzt
-          this->current_header_ = this->pending_header_;
+          if (this->pending_header_ == "7DF") {
+            // Broadcast-Reset: Header intern leeren (= kein spezieller Header)
+            this->current_header_.clear();
+            ESP_LOGD(TAG, "Header zurueckgesetzt auf Broadcast (7DF)");
+          } else {
+            this->current_header_ = this->pending_header_;
+            ESP_LOGD(TAG, "Header gesetzt auf: %s", this->current_header_.c_str());
+          }
           this->pending_header_.clear();
           this->header_switch_step_ = 0;
           this->state_ = STATE_READY;
-          ESP_LOGD(TAG, "Header gesetzt auf: %s", this->current_header_.c_str());
           // Response-Buffer leeren (ATSH-OK-Antwort verwerfen)
           this->response_buffer_.clear();
           this->waiting_for_response_ = false;
@@ -194,7 +200,7 @@ void ELM327BLEHub::run_init_sequence() {
     {"ATS0\r",   500, "Spaces aus"},
     {"ATH0\r",   500, "Headers aus"},
     {"ATAL\r",   500, "Allow Long Messages (>7 Bytes)"},
-    {"ATST96\r",  500, "Timeout 600ms (fuer Multi-Frame)"},
+    {"ATSTFF\r",  500, "Timeout max (1020ms pro Frame)"},
     {"ATSP0\r", 1000, "Auto-Protokoll"},
     {"0100\r",  5000, "Protokoll-Erkennung"},
   };
@@ -326,17 +332,14 @@ void ELM327BLEHub::request_next_pid() {
   }
 
   // Wenn wir von einem Header-Sensor zurueck zu einem ohne Header wechseln,
-  // muessen wir den Header zuruecksetzen
+  // muessen wir den Header auf CAN-Broadcast (7DF) zuruecksetzen
   if (needed_header.empty() && !this->current_header_.empty()) {
-    // Zurueck zum Default-Header
-    ESP_LOGD(TAG, "Header zuruecksetzen (ATSH-Reset)");
-    this->pending_header_ = "";
-    // Sende ATSH-Reset: leerer Header = Standard-Broadcast
-    // Wir setzen einfach current_header_ zurueck, der ELM327 nutzt
-    // dann den zuletzt gesetzten Header. Fuer Mode 01 PIDs ist das
-    // normalerweise kein Problem (Broadcast-Anfrage).
-    // Bei Bedarf kann man hier "ATSH7DF\r" (CAN Broadcast) senden.
-    this->current_header_.clear();
+    ESP_LOGD(TAG, "Header zuruecksetzen: %s -> 7DF (Broadcast)", this->current_header_.c_str());
+    this->pending_header_ = "7DF";
+    this->header_switch_step_ = 0;
+    this->header_switch_time_ = millis();
+    this->state_ = STATE_SWITCHING_HEADER;
+    return;
   }
 
   std::string cmd = this->get_command_for_poll_index(idx);
@@ -467,8 +470,17 @@ bool ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
     // Pruefen ob die Response den erwarteten Prefix enthaelt
     size_t pos = clean.find(entry.expected_prefix);
     if (pos != std::string::npos) {
-      // Gesamte Response ab dem Prefix als Hex-String publizieren
       std::string data = clean.substr(pos);
+      // Schutz gegen abgeschnittene Multi-Frame Responses:
+      // Prefix (z.B. "620101") + mindestens 8 Hex-Zeichen Nutzdaten = 4 Bytes
+      // Wenn weniger, ist die Response wahrscheinlich unvollstaendig
+      size_t min_len = entry.expected_prefix.length() + 8;
+      if (data.length() < min_len) {
+        ESP_LOGW(TAG, "Response zu kurz (%d Zeichen, erwartet >%d): %s",
+                 (int) data.length(), (int) min_len, data.c_str());
+        matched = true;  // trotzdem als matched zaehlen, damit kein "kein Sensor" Log kommt
+        continue;        // aber NICHT publizieren
+      }
       entry.sensor->publish_state(data);
       ESP_LOGV(TAG, "Raw-PID Match [%s]", entry.expected_prefix.c_str());
       matched = true;
