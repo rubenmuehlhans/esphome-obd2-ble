@@ -138,7 +138,7 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   void parse_obd2_response(const std::string &clean);
   void parse_dtc_response(const std::string &clean);
   void parse_voltage_response(const std::string &clean);
-  void dispatch_raw_pid_response(const std::string &clean);
+  bool dispatch_raw_pid_response(const std::string &clean);
   std::string decode_dtc(const std::string &raw);
 
   // Sensor-Lookup

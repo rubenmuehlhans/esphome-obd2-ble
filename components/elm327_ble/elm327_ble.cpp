@@ -164,7 +164,7 @@ void ELM327BLEHub::loop() {
       }
       // Timeout pruefen
       if (this->waiting_for_response_ && (now - this->last_request_time_ >= this->request_timeout_)) {
-        ESP_LOGW(TAG, "Antwort-Timeout, mache weiter...");
+        ESP_LOGW(TAG, "Timeout nach %ums - keine Antwort erhalten", this->request_timeout_);
         this->waiting_for_response_ = false;
         this->response_buffer_.clear();
       }
@@ -343,13 +343,18 @@ void ELM327BLEHub::request_next_pid() {
   int pid_count = this->pid_sensors_.size();
   int raw_count = this->raw_pid_text_sensors_.size();
 
+  // Request-Log: Befehl + Header auf INFO-Level fuer Ping-Pong Sichtbarkeit
   if (idx < pid_count) {
-    ESP_LOGD(TAG, "PID[%d/%d] gesendet: %s", idx + 1, this->total_poll_count_, cmd.c_str());
+    ESP_LOGI(TAG, ">> [%d/%d] %s", idx + 1, this->total_poll_count_, cmd.c_str());
   } else if (idx < pid_count + raw_count) {
-    ESP_LOGD(TAG, "Raw-PID[%d/%d] gesendet: %s (header=%s)", idx + 1, this->total_poll_count_,
-             cmd.c_str(), this->raw_pid_text_sensors_[idx - pid_count].header.c_str());
+    std::string hdr = this->raw_pid_text_sensors_[idx - pid_count].header;
+    if (!hdr.empty()) {
+      ESP_LOGI(TAG, ">> [%d/%d] %s (ECU %s)", idx + 1, this->total_poll_count_, cmd.c_str(), hdr.c_str());
+    } else {
+      ESP_LOGI(TAG, ">> [%d/%d] %s", idx + 1, this->total_poll_count_, cmd.c_str());
+    }
   } else {
-    ESP_LOGD(TAG, "DTC Abfrage [%d/%d] gesendet", idx + 1, this->total_poll_count_);
+    ESP_LOGI(TAG, ">> [%d/%d] DTC Abfrage", idx + 1, this->total_poll_count_);
   }
 
   this->response_buffer_.clear();
@@ -394,7 +399,7 @@ void ELM327BLEHub::process_response(const std::string &response) {
     clean = stripped;
   }
 
-  ESP_LOGD(TAG, "Antwort: %s", clean.c_str());
+  ESP_LOGI(TAG, "<< %s", clean.c_str());
 
   // Debug: Raw Text Sensor (alle Antworten)
   if (this->raw_text_sensor_ != nullptr) {
@@ -423,7 +428,7 @@ void ELM327BLEHub::process_response(const std::string &response) {
   // Raw-PID Text-Sensoren pruefen (vor dem spezifischen Parsing)
   // Damit werden alle Responses, die zu einem raw_pid Sensor passen,
   // als Hex-String weitergegeben
-  this->dispatch_raw_pid_response(clean);
+  bool raw_matched = this->dispatch_raw_pid_response(clean);
 
   // DTC-Antwort (Mode 03, beginnt mit "43")
   if (clean.find("43") != std::string::npos) {
@@ -443,10 +448,9 @@ void ELM327BLEHub::process_response(const std::string &response) {
     return;
   }
 
-  // Mode 22 Antwort (beginnt mit "62") — wird bereits von dispatch_raw_pid_response behandelt
-  // Falls kein raw_pid Sensor registriert ist, loggen wir es trotzdem
-  if (clean.find("62") != std::string::npos) {
-    ESP_LOGD(TAG, "Mode 22 Response (kein passender Sensor): %s", clean.c_str());
+  // Mode 22 Antwort — nur loggen wenn kein raw_pid Sensor gematcht hat
+  if (!raw_matched && clean.find("62") != std::string::npos) {
+    ESP_LOGW(TAG, "Mode 22 Response ohne passenden Sensor: %s", clean.c_str());
     return;
   }
 }
@@ -454,7 +458,8 @@ void ELM327BLEHub::process_response(const std::string &response) {
 // ============================================================
 // Raw-PID Text-Sensor Dispatching
 // ============================================================
-void ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
+bool ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
+  bool matched = false;
   for (auto &entry : this->raw_pid_text_sensors_) {
     if (entry.expected_prefix.empty())
       continue;
@@ -465,9 +470,11 @@ void ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
       // Gesamte Response ab dem Prefix als Hex-String publizieren
       std::string data = clean.substr(pos);
       entry.sensor->publish_state(data);
-      ESP_LOGD(TAG, "Raw-PID Match [%s]: %s", entry.expected_prefix.c_str(), data.c_str());
+      ESP_LOGV(TAG, "Raw-PID Match [%s]", entry.expected_prefix.c_str());
+      matched = true;
     }
   }
+  return matched;
 }
 
 // ============================================================
