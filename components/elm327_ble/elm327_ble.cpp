@@ -8,6 +8,16 @@ namespace elm327_ble {
 
 static const char *TAG = "elm327_ble";
 
+// ============================================================
+// BLE Connection Switch
+// ============================================================
+void ELM327BLESwitch::write_state(bool state) {
+  if (this->hub_ != nullptr) {
+    this->hub_->set_ble_enabled(state);
+  }
+  this->publish_state(state);
+}
+
 void ELM327BLEHub::setup() {
   ESP_LOGCONFIG(TAG, "ELM327 BLE Hub wird initialisiert...");
 }
@@ -55,6 +65,9 @@ void ELM327BLEHub::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t
       this->current_header_.clear();
       if (this->connected_binary_sensor_ != nullptr)
         this->connected_binary_sensor_->publish_state(false);
+      // Switch-State synchronisieren (zeigt den enabled-Status des ble_client)
+      if (this->connection_switch_ != nullptr)
+        this->connection_switch_->publish_state(this->parent()->enabled);
       break;
     }
 
@@ -215,6 +228,8 @@ void ELM327BLEHub::run_init_sequence() {
     this->update_total_poll_count();
     if (this->connected_binary_sensor_ != nullptr)
       this->connected_binary_sensor_->publish_state(true);
+    if (this->connection_switch_ != nullptr)
+      this->connection_switch_->publish_state(true);
     return;
   }
 
@@ -759,6 +774,32 @@ void ELM327BLEHub::register_connected_binary_sensor(binary_sensor::BinarySensor 
 
 void ELM327BLEHub::register_engine_running_binary_sensor(binary_sensor::BinarySensor *sensor) {
   this->engine_running_binary_sensor_ = sensor;
+}
+
+void ELM327BLEHub::register_connection_switch(switch_::Switch *sw) {
+  this->connection_switch_ = sw;
+}
+
+// ============================================================
+// BLE-Verbindung steuern (Switch)
+// ============================================================
+void ELM327BLEHub::set_ble_enabled(bool enabled) {
+  ESP_LOGI(TAG, "BLE-Verbindung %s", enabled ? "aktiviert" : "deaktiviert");
+  this->parent()->set_enabled(enabled);
+  if (this->connection_switch_ != nullptr) {
+    this->connection_switch_->publish_state(enabled);
+  }
+  if (!enabled) {
+    // State zuruecksetzen
+    this->state_ = STATE_IDLE;
+    this->handles_resolved_ = false;
+    this->init_step_ = 0;
+    this->waiting_for_response_ = false;
+    this->response_buffer_.clear();
+    this->current_header_.clear();
+    if (this->connected_binary_sensor_ != nullptr)
+      this->connected_binary_sensor_->publish_state(false);
+  }
 }
 
 // ============================================================

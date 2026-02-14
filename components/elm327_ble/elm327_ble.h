@@ -6,6 +6,7 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/switch/switch.h"
 
 #include <string>
 #include <vector>
@@ -39,6 +40,19 @@ struct RawPIDTextSensorEntry {
   std::string expected_prefix; // z.B. "6201019" (Response-Prefix zum Zuordnen)
 };
 
+// Forward-Deklaration
+class ELM327BLEHub;
+
+// Switch zum Trennen/Verbinden der BLE-Verbindung
+class ELM327BLESwitch : public switch_::Switch {
+ public:
+  void set_hub(ELM327BLEHub *hub) { this->hub_ = hub; }
+
+ protected:
+  void write_state(bool state) override;
+  ELM327BLEHub *hub_{nullptr};
+};
+
 class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
  public:
   void setup() override;
@@ -66,9 +80,13 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
                                      const std::string &command);
   void register_connected_binary_sensor(binary_sensor::BinarySensor *sensor);
   void register_engine_running_binary_sensor(binary_sensor::BinarySensor *sensor);
+  void register_connection_switch(switch_::Switch *sw);
 
   // Oeffentlicher Befehl (fuer Service-Calls aus HA)
   void send_custom_command(const std::string &cmd);
+
+  // BLE-Verbindung steuern (fuer Switch)
+  void set_ble_enabled(bool enabled);
 
  protected:
   // BLE UUIDs
@@ -129,6 +147,9 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   // Binary-Sensoren
   binary_sensor::BinarySensor *connected_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *engine_running_binary_sensor_{nullptr};
+
+  // Switch
+  switch_::Switch *connection_switch_{nullptr};
 
   // Methoden
   void send_command(const std::string &cmd);

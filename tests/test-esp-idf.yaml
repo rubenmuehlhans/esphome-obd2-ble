@@ -79,6 +79,10 @@ text_sensor:
     pid: 0x01019
     header: "7E4"
 
+switch:
+  - platform: elm327_ble
+    name: "ELM327 Verbindung"
+
 binary_sensor:
   - platform: elm327_ble
     type: connected
