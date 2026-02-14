@@ -67,6 +67,22 @@ text_sensor:
     type: dtc
     name: "Fehlercodes"
 
+  - platform: elm327_ble
+    type: raw
+    name: "Letzte Antwort"
+
+  # Raw PID Text-Sensor (Mode 22, mit ECU Header)
+  - platform: elm327_ble
+    type: raw_pid
+    name: "Test Raw PID"
+    mode: 0x22
+    pid: 0x01019
+    header: "7E4"
+
+switch:
+  - platform: elm327_ble
+    name: "ELM327 Verbindung"
+
 binary_sensor:
   - platform: elm327_ble
     type: connected

@@ -199,7 +199,7 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(CONF_ELM327_BLE_ID): cv.use_id(ELM327BLEHub),
             cv.Optional(CONF_TYPE): cv.one_of(*PID_TYPES, lower=True),
             cv.Optional(CONF_MODE, default=0x01): cv.hex_uint8_t,
-            cv.Optional(CONF_PID): cv.hex_uint8_t,
+            cv.Optional(CONF_PID): cv.hex_uint16_t,
             cv.Optional(CONF_AT_COMMAND): cv.string,
         }
     ),

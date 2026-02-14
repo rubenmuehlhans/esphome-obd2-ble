@@ -183,6 +183,11 @@ text_sensor:
     ssid:
       name: "WLAN"
 
+# --- BLE-Verbindung steuern ---
+switch:
+  - platform: elm327_ble
+    name: "ELM327 Verbindung"
+
 # --- Status-Sensoren ---
 binary_sensor:
   - platform: elm327_ble
