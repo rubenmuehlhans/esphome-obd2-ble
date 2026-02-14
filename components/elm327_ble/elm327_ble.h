@@ -69,6 +69,7 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   void set_char_rx_uuid(const std::string &uuid) { this->char_rx_uuid_str_ = uuid; }
   void set_request_interval(uint32_t interval_ms) { this->request_interval_ = interval_ms; }
   void set_request_timeout(uint32_t timeout_ms) { this->request_timeout_ = timeout_ms; }
+  void set_protocol(const std::string &protocol) { this->protocol_ = protocol; }
 
   // Sensoren registrieren
   void register_pid_sensor(sensor::Sensor *sensor, uint8_t mode, uint16_t pid);
@@ -94,6 +95,9 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   std::string char_tx_uuid_str_;
   std::string char_rx_uuid_str_;
 
+  // ELM327 CAN-Protokoll (z.B. "6" fuer CAN 500kBaud, "0" fuer Auto-Detect)
+  std::string protocol_{"0"};
+
   // BLE Handles
   uint16_t char_tx_handle_{0};
   uint16_t char_rx_handle_{0};
@@ -112,9 +116,15 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   State state_{STATE_IDLE};
 
   // Initialisierung
+  struct InitCmd {
+    const char *cmd;
+    uint32_t delay_after;
+    const char *description;
+  };
   int init_step_{0};
-  static const int INIT_STEPS_COUNT = 9;
   uint32_t last_init_time_{0};
+  std::vector<InitCmd> init_cmds_;  // Wird beim ersten run_init_sequence() Aufruf befuellt
+  std::string atsp_cmd_;            // Haelt den ATSP-String damit c_str() gueltig bleibt
 
   // PID-Abfragezyklus (numerische Sensoren)
   std::vector<PIDSensorEntry> pid_sensors_;

@@ -29,6 +29,7 @@ void ELM327BLEHub::dump_config() {
   ESP_LOGCONFIG(TAG, "  RX Char UUID: %s", this->char_rx_uuid_str_.c_str());
   ESP_LOGCONFIG(TAG, "  Abfrageintervall: %u ms", this->request_interval_);
   ESP_LOGCONFIG(TAG, "  Timeout: %u ms", this->request_timeout_);
+  ESP_LOGCONFIG(TAG, "  Protokoll: ATSP%s", this->protocol_.c_str());
   ESP_LOGCONFIG(TAG, "  Registrierte PID-Sensoren: %d", (int) this->pid_sensors_.size());
   ESP_LOGCONFIG(TAG, "  Registrierte Raw-PID Text-Sensoren: %d", (int) this->raw_pid_text_sensors_.size());
   if (this->dtc_text_sensor_ != nullptr)
@@ -200,25 +201,31 @@ void ELM327BLEHub::loop() {
 void ELM327BLEHub::run_init_sequence() {
   uint32_t now = millis();
 
-  struct InitCmd {
-    const char *cmd;
-    uint32_t delay_after;
-    const char *description;
-  };
+  // Init-Kommandos einmalig beim ersten Aufruf aufbauen
+  // (atsp_cmd_ und init_cmds_ sind Member-Variablen)
+  if (this->init_cmds_.empty()) {
+    this->atsp_cmd_ = "ATSP" + this->protocol_ + "\r";
+    bool auto_detect = (this->protocol_ == "0");
 
-  static const InitCmd init_cmds[] = {
-    {"ATZ\r",   2000, "Reset"},
-    {"ATE0\r",   500, "Echo aus"},
-    {"ATL0\r",   500, "Linefeed aus"},
-    {"ATS0\r",   500, "Spaces aus"},
-    {"ATH0\r",   500, "Headers aus"},
-    {"ATAL\r",   500, "Allow Long Messages (>7 Bytes)"},
-    {"ATSTFF\r",  500, "Timeout max (1020ms pro Frame)"},
-    {"ATSP0\r", 1000, "Auto-Protokoll"},
-    {"0100\r",  5000, "Protokoll-Erkennung"},
-  };
+    this->init_cmds_.push_back({"ATZ\r",            2000, "Reset"});
+    this->init_cmds_.push_back({"ATE0\r",            500, "Echo aus"});
+    this->init_cmds_.push_back({"ATL0\r",            500, "Linefeed aus"});
+    this->init_cmds_.push_back({"ATS0\r",            500, "Spaces aus"});
+    this->init_cmds_.push_back({"ATH0\r",            500, "Headers aus"});
+    this->init_cmds_.push_back({"ATAL\r",            500, "Allow Long Messages (>7 Bytes)"});
+    this->init_cmds_.push_back({"ATSTFF\r",          500, "Timeout max (1020ms pro Frame)"});
+    this->init_cmds_.push_back({this->atsp_cmd_.c_str(), 1000, "Protokoll setzen"});
+    if (auto_detect) {
+      // Bei Auto-Detect braucht der ELM327 einen OBD-Request (0100)
+      // um das Protokoll zu erkennen. Bei explizitem Protokoll (z.B. ATSP6)
+      // ist das nicht noetig und wuerde bei EVs fehlschlagen.
+      this->init_cmds_.push_back({"0100\r", 5000, "Protokoll-Erkennung"});
+    }
+  }
 
-  if (this->init_step_ >= INIT_STEPS_COUNT) {
+  int steps_count = (int) this->init_cmds_.size();
+
+  if (this->init_step_ >= steps_count) {
     // Initialisierung abgeschlossen
     ESP_LOGI(TAG, "ELM327 initialisiert - bereit fuer Abfragen");
     this->state_ = STATE_READY;
@@ -230,23 +237,26 @@ void ELM327BLEHub::run_init_sequence() {
       this->connected_binary_sensor_->publish_state(true);
     if (this->connection_switch_ != nullptr)
       this->connection_switch_->publish_state(true);
+    this->init_cmds_.clear();  // Speicher freigeben
     return;
   }
 
-  if (this->last_init_time_ == 0 || (now - this->last_init_time_ >= init_cmds[this->init_step_].delay_after)) {
+  auto &step = this->init_cmds_[this->init_step_];
+
+  if (this->last_init_time_ == 0 || (now - this->last_init_time_ >= step.delay_after)) {
     if (this->last_init_time_ != 0) {
       // Naechster Schritt
       this->init_step_++;
-      if (this->init_step_ >= INIT_STEPS_COUNT) {
+      if (this->init_step_ >= steps_count) {
         // Letzter Delay abgelaufen, fertig
         this->run_init_sequence();
         return;
       }
     }
 
-    ESP_LOGD(TAG, "Init [%d/%d]: %s", this->init_step_ + 1, INIT_STEPS_COUNT,
-             init_cmds[this->init_step_].description);
-    this->send_command(init_cmds[this->init_step_].cmd);
+    auto &cmd = this->init_cmds_[this->init_step_];
+    ESP_LOGD(TAG, "Init [%d/%d]: %s", this->init_step_ + 1, steps_count, cmd.description);
+    this->send_command(cmd.cmd);
     this->last_init_time_ = now;
   }
 }
@@ -485,6 +495,13 @@ bool ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
     // Pruefen ob die Response den erwarteten Prefix enthaelt
     size_t pos = clean.find(entry.expected_prefix);
     if (pos != std::string::npos) {
+      // Bei gleicher PID aber unterschiedlichem Header: nur an den Sensor
+      // dispatchen, dessen Header zum aktuell gesetzten Header passt.
+      // z.B. PID 22B002 mit Header 7A0 vs. 7C6
+      if (!entry.header.empty() && entry.header != this->current_header_) {
+        continue;  // Dieser Sensor gehoert zu einem anderen ECU-Header
+      }
+
       std::string data = clean.substr(pos);
       // Schutz gegen abgeschnittene Multi-Frame Responses:
       // Prefix (z.B. "620101") + mindestens 8 Hex-Zeichen Nutzdaten = 4 Bytes
@@ -497,7 +514,8 @@ bool ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
         continue;        // aber NICHT publizieren
       }
       entry.sensor->publish_state(data);
-      ESP_LOGV(TAG, "Raw-PID Match [%s]", entry.expected_prefix.c_str());
+      ESP_LOGV(TAG, "Raw-PID Match [%s] (header=%s)", entry.expected_prefix.c_str(),
+               entry.header.c_str());
       matched = true;
     }
   }

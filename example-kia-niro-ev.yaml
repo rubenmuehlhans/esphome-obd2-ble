@@ -94,7 +94,8 @@ elm327_ble:
   char_tx_uuid: "0000FFF2-0000-1000-8000-00805F9B34FB"
   char_rx_uuid: "0000FFF1-0000-1000-8000-00805F9B34FB"
   request_interval: 2s
-  request_timeout: 5s
+  request_timeout: 10s
+  protocol: "6"  # CAN 11-bit 500kBaud (Kia/Hyundai). "0" = Auto-Detect
 
 # ============================================================
 # Raw PID Text-Sensoren (Hex-Antwort → Home Assistant)

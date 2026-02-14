@@ -14,6 +14,7 @@ CONF_CHAR_TX_UUID = "char_tx_uuid"
 CONF_CHAR_RX_UUID = "char_rx_uuid"
 CONF_REQUEST_INTERVAL = "request_interval"
 CONF_REQUEST_TIMEOUT = "request_timeout"
+CONF_PROTOCOL = "protocol"
 
 elm327_ble_ns = cg.esphome_ns.namespace("elm327_ble")
 ELM327BLEHub = elm327_ble_ns.class_(
@@ -33,6 +34,9 @@ CONFIG_SCHEMA = (
             cv.Optional(
                 CONF_REQUEST_TIMEOUT, default="5s"
             ): cv.positive_time_period_milliseconds,
+            cv.Optional(
+                CONF_PROTOCOL, default="0"
+            ): cv.string,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -50,3 +54,4 @@ async def to_code(config):
     cg.add(var.set_char_rx_uuid(config[CONF_CHAR_RX_UUID]))
     cg.add(var.set_request_interval(config[CONF_REQUEST_INTERVAL]))
     cg.add(var.set_request_timeout(config[CONF_REQUEST_TIMEOUT]))
+    cg.add(var.set_protocol(config[CONF_PROTOCOL]))
