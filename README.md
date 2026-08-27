@@ -325,6 +325,16 @@ text_sensor:
     name: "Custom Command Raw"
     command: "2201019\r"  # Direkter OBD2-Befehl
     header: "7E4"
+
+  # Selten benoetigte Werte seltener abfragen und kurze Antworten verwerfen:
+  - platform: elm327_ble
+    type: raw_pid
+    name: "Kilometerstand Raw"
+    mode: 0x22
+    pid: 0xB002
+    header: "7C6"
+    update_prio: 10          # nur in jedem 10. Abfragezyklus
+    response_min_length: 20  # kuerzere Antworten werden nicht publiziert
 ```
 
 ### Parameter
@@ -336,8 +346,28 @@ text_sensor:
 | `pid` | nein* | PID-Nummer (hex, bis 16 Bit) |
 | `command` | nein* | Alternativer direkter Befehl-String |
 | `header` | nein | ECU-Adresse für ATSH (z.B. `"7E4"`) |
+| `update_prio` | nein | Abfrage nur in jedem N-ten Zyklus (Default: `1` = jeder Zyklus, max. `255`) |
+| `response_min_length` | nein | Mindestlänge der Antwort in Hex-Zeichen (Default: `0` = keine Prüfung) |
 
 *Entweder `pid` (mit optionalem `mode`) oder `command` muss angegeben werden.
+
+#### `update_prio` — Abfragezyklus entlasten
+
+Alle Sensoren werden nacheinander in einem Zyklus abgefragt; der Abstand zwischen
+zwei Abfragen ist `request_interval`. Bei vielen PIDs — etwa den 96 bis 192
+Zellspannungen eines Elektrofahrzeugs — dauert ein vollständiger Zyklus
+entsprechend lange. `update_prio` nimmt langsam veränderliche Werte aus jedem
+Zyklus heraus: `1` bedeutet jeden Zyklus, `2` jeden zweiten, `10` jeden zehnten.
+Numerische PID-Sensoren und die DTC-Abfrage laufen immer mit.
+
+#### `response_min_length` — unvollständige Antworten verwerfen
+
+Multi-Frame-Antworten (ISO-TP) kommen bei schwachem BLE-Empfang gelegentlich
+abgeschnitten an. Ist `response_min_length` gesetzt, wird eine kürzere Antwort
+verworfen und nur als Warnung geloggt, statt einen unvollständigen Wert nach
+Home Assistant zu melden. Ohne Angabe greift ein Grundschutz von
+Prefix + 8 Hex-Zeichen. Die Länge zählt die Hex-Zeichen der Antwort
+einschließlich des Prefix (`620101…`), nicht die Bytes.
 
 ### Response-Format
 

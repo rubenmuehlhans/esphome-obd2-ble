@@ -133,12 +133,18 @@ text_sensor:
 
   # --- PID 22B002: Kilometerstand (ECU 7C6) ---
   # Enthaelt: Odometer
+  # update_prio: 10 = nur in jedem 10. Abfragezyklus — der Kilometerstand
+  # aendert sich langsam und muss den Zyklus nicht in jeder Runde belegen.
+  # response_min_length: unvollstaendige Multi-Frame Antworten werden verworfen
+  # statt einen abgeschnittenen Wert nach Home Assistant zu melden.
   - platform: elm327_ble
     type: raw_pid
     name: "Kia Cluster B002 Raw"
     mode: 0x22
     pid: 0xB002
     header: "7C6"
+    update_prio: 10
+    response_min_length: 20
 
   # --- Debug: Letzte Rohantwort (alle Antworten) ---
   - platform: elm327_ble

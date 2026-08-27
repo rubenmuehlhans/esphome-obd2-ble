@@ -38,6 +38,8 @@ struct RawPIDTextSensorEntry {
   std::string header;       // ECU-Header z.B. "7E4", leer = kein ATSH
   std::string command;      // z.B. "2201019\r"
   std::string expected_prefix; // z.B. "6201019" (Response-Prefix zum Zuordnen)
+  uint16_t min_response_length; // Mindestlaenge in Hex-Zeichen, 0 = keine Pruefung
+  uint16_t update_prio;     // 1 = jeder Zyklus, N = jeder N-te Zyklus
 };
 
 // Forward-Deklaration
@@ -78,7 +80,8 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   void register_raw_text_sensor(text_sensor::TextSensor *sensor);
   void register_raw_pid_text_sensor(text_sensor::TextSensor *sensor, uint8_t mode,
                                      uint16_t pid, const std::string &header,
-                                     const std::string &command);
+                                     const std::string &command,
+                                     uint16_t min_response_length, uint16_t update_prio);
   void register_connected_binary_sensor(binary_sensor::BinarySensor *sensor);
   void register_engine_running_binary_sensor(binary_sensor::BinarySensor *sensor);
   void register_connection_switch(switch_::Switch *sw);
@@ -135,6 +138,7 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   // Polling-Index: laeuft ueber pid_sensors_ + raw_pid_text_sensors_ + DTC
   int current_poll_index_{0};
   int total_poll_count_{0};
+  uint32_t poll_cycle_{0};   // Zaehlt abgeschlossene Durchlaeufe (fuer update_prio)
 
   uint32_t request_interval_{2000};
   uint32_t request_timeout_{10000};  // 10s fuer Multi-Frame ISO-TP Responses
@@ -179,6 +183,8 @@ class ELM327BLEHub : public Component, public ble_client::BLEClientNode {
   // Hilfsfunktionen
   std::string get_header_for_poll_index(int idx);
   std::string get_command_for_poll_index(int idx);
+  bool is_poll_index_due(int idx);
+  int advance_poll_index(int idx);
   void update_total_poll_count();
 };
 

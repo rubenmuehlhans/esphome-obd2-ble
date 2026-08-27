@@ -12,6 +12,8 @@ CONF_PID = "pid"
 CONF_MODE = "mode"
 CONF_HEADER = "header"
 CONF_COMMAND = "command"
+CONF_UPDATE_PRIO = "update_prio"
+CONF_RESPONSE_MIN_LENGTH = "response_min_length"
 
 TEXT_SENSOR_TYPES = {
     CONF_DTC: {
@@ -56,6 +58,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_PID): cv.hex_uint16_t,
             cv.Optional(CONF_HEADER): cv.string,
             cv.Optional(CONF_COMMAND): cv.string,
+            # 1 = in jedem Abfragezyklus, N = in jedem N-ten Zyklus
+            cv.Optional(CONF_UPDATE_PRIO, default=1): cv.int_range(min=1, max=255),
+            # Mindestlaenge der Antwort in Hex-Zeichen, 0 = keine Pruefung
+            cv.Optional(
+                CONF_RESPONSE_MIN_LENGTH, default=0
+            ): cv.int_range(min=0, max=65535),
         }
     ),
     validate_raw_pid,
@@ -73,15 +81,21 @@ async def to_code(config):
         cg.add(hub.register_raw_text_sensor(var))
     elif sensor_type == CONF_RAW_PID:
         header = config.get(CONF_HEADER, "")
+        prio = config[CONF_UPDATE_PRIO]
+        min_length = config[CONF_RESPONSE_MIN_LENGTH]
         if CONF_COMMAND in config:
             # Beliebiger Befehl (z.B. "2101\r" oder "ATSH7E4\r")
             cg.add(
                 hub.register_raw_pid_text_sensor(
-                    var, 0, 0, header, config[CONF_COMMAND]
+                    var, 0, 0, header, config[CONF_COMMAND], min_length, prio
                 )
             )
         else:
             # Mode + PID → Command wird im C++ generiert
             mode = config[CONF_MODE]
             pid = config[CONF_PID]
-            cg.add(hub.register_raw_pid_text_sensor(var, mode, pid, header, ""))
+            cg.add(
+                hub.register_raw_pid_text_sensor(
+                    var, mode, pid, header, "", min_length, prio
+                )
+            )

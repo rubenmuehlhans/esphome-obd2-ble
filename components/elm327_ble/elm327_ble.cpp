@@ -35,8 +35,9 @@ void ELM327BLEHub::dump_config() {
   if (this->dtc_text_sensor_ != nullptr)
     ESP_LOGCONFIG(TAG, "  DTC Text Sensor: ja");
   for (auto &entry : this->raw_pid_text_sensors_) {
-    ESP_LOGCONFIG(TAG, "  Raw-PID: cmd=%s header=%s prefix=%s",
-                  entry.command.c_str(), entry.header.c_str(), entry.expected_prefix.c_str());
+    ESP_LOGCONFIG(TAG, "  Raw-PID: cmd=%s header=%s prefix=%s prio=%u min_len=%u",
+                  entry.command.c_str(), entry.header.c_str(), entry.expected_prefix.c_str(),
+                  (unsigned) entry.update_prio, (unsigned) entry.min_response_length);
   }
 }
 
@@ -178,15 +179,19 @@ void ELM327BLEHub::loop() {
     }
 
     case STATE_READY:
-      // Naechste PID-Abfrage senden
-      if (!this->waiting_for_response_ && (now - this->last_request_time_ >= this->request_interval_)) {
-        this->request_next_pid();
-      }
-      // Timeout pruefen
+      // Reihenfolge ist wichtig: erst den Timeout der laufenden Abfrage pruefen,
+      // dann die naechste senden. Andersherum wird die in request_next_pid()
+      // frisch gesetzte last_request_time_ gegen das bereits am Schleifenanfang
+      // gelesene 'now' geprueft — die vorzeichenlose Differenz laeuft ueber und
+      // meldet unmittelbar nach jedem Request einen Timeout.
       if (this->waiting_for_response_ && (now - this->last_request_time_ >= this->request_timeout_)) {
         ESP_LOGW(TAG, "Timeout nach %ums - keine Antwort erhalten", this->request_timeout_);
         this->waiting_for_response_ = false;
         this->response_buffer_.clear();
+      }
+      // Naechste PID-Abfrage senden
+      if (!this->waiting_for_response_ && (now - this->last_request_time_ >= this->request_interval_)) {
+        this->request_next_pid();
       }
       break;
 
@@ -230,6 +235,7 @@ void ELM327BLEHub::run_init_sequence() {
     ESP_LOGI(TAG, "ELM327 initialisiert - bereit fuer Abfragen");
     this->state_ = STATE_READY;
     this->current_poll_index_ = 0;
+    this->poll_cycle_ = 0;
     this->waiting_for_response_ = false;
     this->current_header_.clear();
     this->update_total_poll_count();
@@ -320,6 +326,29 @@ std::string ELM327BLEHub::get_header_for_poll_index(int idx) {
   return "";
 }
 
+// Ist der Eintrag in diesem Zyklus an der Reihe? (update_prio)
+// Numerische PID-Sensoren und die DTC-Abfrage laufen immer mit.
+bool ELM327BLEHub::is_poll_index_due(int idx) {
+  int pid_count = this->pid_sensors_.size();
+  int raw_count = this->raw_pid_text_sensors_.size();
+
+  if (idx < pid_count || idx >= pid_count + raw_count)
+    return true;
+
+  uint16_t prio = this->raw_pid_text_sensors_[idx - pid_count].update_prio;
+  if (prio <= 1)
+    return true;
+  return (this->poll_cycle_ % prio) == 0;
+}
+
+// Poll-Index weiterschalten und dabei abgeschlossene Zyklen zaehlen
+int ELM327BLEHub::advance_poll_index(int idx) {
+  int next = (idx + 1) % this->total_poll_count_;
+  if (next == 0)
+    this->poll_cycle_++;
+  return next;
+}
+
 std::string ELM327BLEHub::get_command_for_poll_index(int idx) {
   int pid_count = this->pid_sensors_.size();
   int raw_count = this->raw_pid_text_sensors_.size();
@@ -341,6 +370,23 @@ void ELM327BLEHub::request_next_pid() {
     return;
 
   int idx = this->current_poll_index_ % this->total_poll_count_;
+
+  // update_prio: Eintraege ueberspringen, die in diesem Zyklus nicht faellig sind.
+  // Die getroffene Auswahl wird sofort in current_poll_index_ festgehalten, damit
+  // ein zwischengeschalteter Header-Wechsel beim erneuten Aufruf denselben
+  // Eintrag trifft und nicht neu durchsucht.
+  int skipped = 0;
+  while (!this->is_poll_index_due(idx) && skipped < this->total_poll_count_) {
+    idx = this->advance_poll_index(idx);
+    skipped++;
+  }
+  this->current_poll_index_ = idx;
+
+  if (skipped >= this->total_poll_count_) {
+    // In diesem Zyklus ist kein Sensor faellig — im naechsten Intervall erneut pruefen
+    this->last_request_time_ = millis();
+    return;
+  }
 
   // Pruefen ob Header-Wechsel noetig
   std::string needed_header = this->get_header_for_poll_index(idx);
@@ -389,7 +435,7 @@ void ELM327BLEHub::request_next_pid() {
   this->waiting_for_response_ = true;
   this->last_request_time_ = millis();
   this->send_command(cmd);
-  this->current_poll_index_ = (idx + 1) % this->total_poll_count_;
+  this->current_poll_index_ = this->advance_poll_index(idx);
 }
 
 // ============================================================
@@ -503,12 +549,14 @@ bool ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
       }
 
       std::string data = clean.substr(pos);
-      // Schutz gegen abgeschnittene Multi-Frame Responses:
-      // Prefix (z.B. "620101") + mindestens 8 Hex-Zeichen Nutzdaten = 4 Bytes
-      // Wenn weniger, ist die Response wahrscheinlich unvollstaendig
-      size_t min_len = entry.expected_prefix.length() + 8;
+      // Schutz gegen abgeschnittene Multi-Frame Responses.
+      // Ist response_min_length gesetzt, gilt dieser Wert; sonst greift der
+      // Grundschutz: Prefix (z.B. "620101") + 8 Hex-Zeichen Nutzdaten = 4 Bytes.
+      size_t min_len = entry.min_response_length > 0
+                           ? (size_t) entry.min_response_length
+                           : entry.expected_prefix.length() + 8;
       if (data.length() < min_len) {
-        ESP_LOGW(TAG, "Response zu kurz (%d Zeichen, erwartet >%d): %s",
+        ESP_LOGW(TAG, "Response zu kurz (%d Zeichen, erwartet >=%d): %s",
                  (int) data.length(), (int) min_len, data.c_str());
         matched = true;  // trotzdem als matched zaehlen, damit kein "kein Sensor" Log kommt
         continue;        // aber NICHT publizieren
@@ -735,12 +783,16 @@ void ELM327BLEHub::register_raw_text_sensor(text_sensor::TextSensor *sensor) {
 
 void ELM327BLEHub::register_raw_pid_text_sensor(text_sensor::TextSensor *sensor, uint8_t mode,
                                                   uint16_t pid, const std::string &header,
-                                                  const std::string &command) {
+                                                  const std::string &command,
+                                                  uint16_t min_response_length,
+                                                  uint16_t update_prio) {
   RawPIDTextSensorEntry entry;
   entry.sensor = sensor;
   entry.mode = mode;
   entry.pid = pid;
   entry.header = header;
+  entry.min_response_length = min_response_length;
+  entry.update_prio = update_prio > 0 ? update_prio : 1;
 
   if (!command.empty()) {
     // Beliebiger Befehl (direkt uebergeben)
@@ -782,8 +834,9 @@ void ELM327BLEHub::register_raw_pid_text_sensor(text_sensor::TextSensor *sensor,
   }
 
   this->raw_pid_text_sensors_.push_back(entry);
-  ESP_LOGD(TAG, "Raw-PID Text-Sensor registriert: cmd=%s header=%s prefix=%s",
-           entry.command.c_str(), entry.header.c_str(), entry.expected_prefix.c_str());
+  ESP_LOGD(TAG, "Raw-PID Text-Sensor registriert: cmd=%s header=%s prefix=%s prio=%u min_len=%u",
+           entry.command.c_str(), entry.header.c_str(), entry.expected_prefix.c_str(),
+           (unsigned) entry.update_prio, (unsigned) entry.min_response_length);
 }
 
 void ELM327BLEHub::register_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
