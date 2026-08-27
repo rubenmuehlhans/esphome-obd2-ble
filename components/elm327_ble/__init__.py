@@ -5,7 +5,7 @@ from esphome.const import CONF_ID
 
 CODEOWNERS = ["@rubenmuehlhans"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["sensor", "text_sensor", "binary_sensor"]
+AUTO_LOAD = ["sensor", "text_sensor", "binary_sensor", "switch"]
 MULTI_CONF = True
 
 CONF_ELM327_BLE_ID = "elm327_ble_id"
