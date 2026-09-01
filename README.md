@@ -351,23 +351,24 @@ text_sensor:
 
 *Entweder `pid` (mit optionalem `mode`) oder `command` muss angegeben werden.
 
-#### `update_prio` — Abfragezyklus entlasten
+#### `update_prio`: Abfragezyklus entlasten
 
 Alle Sensoren werden nacheinander in einem Zyklus abgefragt; der Abstand zwischen
-zwei Abfragen ist `request_interval`. Bei vielen PIDs — etwa den 96 bis 192
-Zellspannungen eines Elektrofahrzeugs — dauert ein vollständiger Zyklus
+zwei Abfragen ist `request_interval`. Bei vielen PIDs, etwa den 96 bis 192
+Zellspannungen eines Elektrofahrzeugs, dauert ein vollständiger Zyklus
 entsprechend lange. `update_prio` nimmt langsam veränderliche Werte aus jedem
 Zyklus heraus: `1` bedeutet jeden Zyklus, `2` jeden zweiten, `10` jeden zehnten.
 Numerische PID-Sensoren und die DTC-Abfrage laufen immer mit.
 
-#### `response_min_length` — unvollständige Antworten verwerfen
+#### `response_min_length`: unvollständige Antworten verwerfen
 
 Multi-Frame-Antworten (ISO-TP) kommen bei schwachem BLE-Empfang gelegentlich
 abgeschnitten an. Ist `response_min_length` gesetzt, wird eine kürzere Antwort
 verworfen und nur als Warnung geloggt, statt einen unvollständigen Wert nach
-Home Assistant zu melden. Ohne Angabe greift ein Grundschutz von
-Prefix + 8 Hex-Zeichen. Die Länge zählt die Hex-Zeichen der Antwort
-einschließlich des Prefix (`620101…`), nicht die Bytes.
+Home Assistant zu melden. Der Wert `0` (Default) schaltet die Prüfung ab: Jede
+Antwort wird publiziert, die Plausibilisierung liegt dann beim Template in
+Home Assistant. Die Länge zählt die Hex-Zeichen der Antwort einschließlich des
+Prefix (`620101…`), nicht die Bytes.
 
 ### Response-Format
 

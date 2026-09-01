@@ -549,15 +549,12 @@ bool ELM327BLEHub::dispatch_raw_pid_response(const std::string &clean) {
       }
 
       std::string data = clean.substr(pos);
-      // Schutz gegen abgeschnittene Multi-Frame Responses.
-      // Ist response_min_length gesetzt, gilt dieser Wert; sonst greift der
-      // Grundschutz: Prefix (z.B. "620101") + 8 Hex-Zeichen Nutzdaten = 4 Bytes.
-      size_t min_len = entry.min_response_length > 0
-                           ? (size_t) entry.min_response_length
-                           : entry.expected_prefix.length() + 8;
-      if (data.length() < min_len) {
-        ESP_LOGW(TAG, "Response zu kurz (%d Zeichen, erwartet >=%d): %s",
-                 (int) data.length(), (int) min_len, data.c_str());
+      // response_min_length: 0 = keine Pruefung, jede Antwort wird publiziert
+      // und die Plausibilisierung liegt beim Template in Home Assistant.
+      // Sonst werden kuerzere (abgeschnittene Multi-Frame) Antworten verworfen.
+      if (entry.min_response_length > 0 && data.length() < entry.min_response_length) {
+        ESP_LOGW(TAG, "Response zu kurz (%d Zeichen, erwartet >=%u): %s",
+                 (int) data.length(), (unsigned) entry.min_response_length, data.c_str());
         matched = true;  // trotzdem als matched zaehlen, damit kein "kein Sensor" Log kommt
         continue;        // aber NICHT publizieren
       }
